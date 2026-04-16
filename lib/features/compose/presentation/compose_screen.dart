@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 
 import '../../attachments/domain/entities/attachment_ref.dart';
 import '../../auth/presentation/auth_controller.dart';
@@ -38,7 +39,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   final _ccController = TextEditingController();
   final _bccController = TextEditingController();
   late final TextEditingController _subjectController;
-  final _bodyController = TextEditingController();
+  late final TextEditingController _bodyController;
 
   bool _showCcBcc = false;
 
@@ -52,6 +53,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       text: widget.replyContext == null
           ? ''
           : '${_prefixFor(widget.replyContext!.action)}${widget.replyContext!.subject}',
+    );
+    _bodyController = TextEditingController(
+      text: widget.replyContext == null
+          ? ''
+          : '\n\n${_quotedTextFor(widget.replyContext!)}',
     );
   }
 
@@ -70,6 +76,24 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       ReplyAction.reply || ReplyAction.replyAll => 'Re: ',
       ReplyAction.forward => 'Fwd: ',
     };
+  }
+
+  String _quotedTextFor(ReplyContext context) {
+    final formattedDate = DateFormat(
+      'EEE, MMM d, y HH:mm',
+    ).format(context.originalReceivedAt);
+    final header = switch (context.action) {
+      ReplyAction.reply || ReplyAction.replyAll =>
+        'On $formattedDate ${context.originalSender} wrote:',
+      ReplyAction.forward =>
+        '---------- Forwarded message ----------\nFrom: ${context.originalSender}\nDate: $formattedDate\nSubject: ${context.subject}',
+    };
+    final quotedBody = context.originalBody
+        .replaceAll('\r\n', '\n')
+        .split('\n')
+        .map((line) => '> $line')
+        .join('\n');
+    return '$header\n$quotedBody';
   }
 
   Future<void> _send() async {

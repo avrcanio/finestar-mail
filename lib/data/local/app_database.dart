@@ -53,12 +53,16 @@ class MessageSummaries extends Table {
 class MessageDetails extends Table {
   TextColumn get id => text()();
   TextColumn get accountId => text().withDefault(const Constant('default'))();
+  TextColumn get folderId => text().withDefault(const Constant(''))();
   TextColumn get subject => text()();
   TextColumn get sender => text()();
   TextColumn get recipients => text()();
   TextColumn get bodyPlain => text()();
   TextColumn get bodyHtml => text().nullable()();
   DateTimeColumn get receivedAt => dateTime()();
+  TextColumn get messageIdHeader => text().nullable()();
+  TextColumn get inReplyToHeader => text().nullable()();
+  TextColumn get referencesHeader => text().nullable()();
 
   @override
   Set<Column<Object>> get primaryKey => {id};
@@ -100,7 +104,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -112,6 +116,21 @@ class AppDatabase extends _$AppDatabase {
         await migrator.addColumn(
           attachmentMetadata,
           attachmentMetadata.accountId,
+        );
+      }
+      if (from < 3) {
+        await migrator.addColumn(messageDetails, messageDetails.folderId);
+        await migrator.addColumn(
+          messageDetails,
+          messageDetails.messageIdHeader,
+        );
+        await migrator.addColumn(
+          messageDetails,
+          messageDetails.inReplyToHeader,
+        );
+        await migrator.addColumn(
+          messageDetails,
+          messageDetails.referencesHeader,
         );
       }
     },

@@ -6,6 +6,7 @@ import 'package:finestar_mail/features/auth/presentation/auth_controller.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_summary.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_thread.dart';
 import 'package:finestar_mail/features/mailbox/domain/repositories/mailbox_repository.dart';
 import 'package:finestar_mail/features/mailbox/presentation/mailbox_screen.dart';
 import 'package:flutter/material.dart';
@@ -181,6 +182,14 @@ class _FakeMailboxRepository implements MailboxRepository {
   Future<MailMessageDetail> getMessageDetail({
     required String accountId,
     required String id,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<MailThread> getMessageThread({
+    required String accountId,
+    required String messageId,
   }) {
     throw UnimplementedError();
   }

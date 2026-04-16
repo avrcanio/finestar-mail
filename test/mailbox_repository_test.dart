@@ -134,4 +134,183 @@ void main() {
 
     expect(messages, isEmpty);
   });
+
+  test('thread lookup includes cached messages from inbox and sent', () async {
+    final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    await _insertFolder(database, 'account:inbox', 'INBOX');
+    await _insertFolder(database, 'account:sent', 'Sent');
+    await _insertDetail(
+      database,
+      id: 'inbox-1',
+      accountId: 'account',
+      folderId: 'account:inbox',
+      subject: 'Project update',
+      sender: 'client@finestar.hr',
+      recipients: 'me@finestar.hr',
+      receivedAt: DateTime(2026, 4, 16, 8),
+    );
+    await _insertDetail(
+      database,
+      id: 'sent-1',
+      accountId: 'account',
+      folderId: 'account:sent',
+      subject: 'Re: Project update',
+      sender: 'me@finestar.hr',
+      recipients: 'client@finestar.hr',
+      receivedAt: DateTime(2026, 4, 16, 9),
+    );
+
+    final repository = MailboxRepositoryImpl(appDatabase: database);
+    final thread = await repository.getMessageThread(
+      accountId: 'account',
+      messageId: 'inbox-1',
+    );
+
+    expect(thread.messages.map((message) => message.id), ['inbox-1', 'sent-1']);
+    expect(thread.messages.map((message) => message.folderName), [
+      'INBOX',
+      'Sent',
+    ]);
+  });
+
+  test('thread lookup prefers RFC linkage over subject fallback', () async {
+    final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    await _insertFolder(database, 'account:inbox', 'INBOX');
+    await _insertDetail(
+      database,
+      id: 'root',
+      accountId: 'account',
+      folderId: 'account:inbox',
+      subject: 'Shared subject',
+      sender: 'one@finestar.hr',
+      recipients: 'me@finestar.hr',
+      receivedAt: DateTime(2026, 4, 16, 8),
+      messageIdHeader: '<root@finestar.hr>',
+    );
+    await _insertDetail(
+      database,
+      id: 'reply',
+      accountId: 'account',
+      folderId: 'account:inbox',
+      subject: 'Re: Shared subject',
+      sender: 'me@finestar.hr',
+      recipients: 'one@finestar.hr',
+      receivedAt: DateTime(2026, 4, 16, 9),
+      messageIdHeader: '<reply@finestar.hr>',
+      inReplyToHeader: '<root@finestar.hr>',
+      referencesHeader: '<root@finestar.hr>',
+    );
+    await _insertDetail(
+      database,
+      id: 'same-subject-unlinked',
+      accountId: 'account',
+      folderId: 'account:inbox',
+      subject: 'Shared subject',
+      sender: 'two@finestar.hr',
+      recipients: 'me@finestar.hr',
+      receivedAt: DateTime(2026, 4, 16, 10),
+      messageIdHeader: '<other@finestar.hr>',
+    );
+
+    final repository = MailboxRepositoryImpl(appDatabase: database);
+    final thread = await repository.getMessageThread(
+      accountId: 'account',
+      messageId: 'root',
+    );
+
+    expect(thread.messages.map((message) => message.id), ['root', 'reply']);
+  });
+
+  test('thread lookup is isolated by account id', () async {
+    final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    await _insertFolder(database, 'first:inbox', 'INBOX', accountId: 'first');
+    await _insertFolder(database, 'second:inbox', 'INBOX', accountId: 'second');
+    await _insertDetail(
+      database,
+      id: 'first-message',
+      accountId: 'first',
+      folderId: 'first:inbox',
+      subject: 'Same subject',
+      sender: 'one@finestar.hr',
+      recipients: 'me@finestar.hr',
+      receivedAt: DateTime(2026, 4, 16, 8),
+    );
+    await _insertDetail(
+      database,
+      id: 'second-message',
+      accountId: 'second',
+      folderId: 'second:inbox',
+      subject: 'Same subject',
+      sender: 'two@finestar.hr',
+      recipients: 'me@finestar.hr',
+      receivedAt: DateTime(2026, 4, 16, 9),
+    );
+
+    final repository = MailboxRepositoryImpl(appDatabase: database);
+    final thread = await repository.getMessageThread(
+      accountId: 'first',
+      messageId: 'first-message',
+    );
+
+    expect(thread.messages.map((message) => message.id), ['first-message']);
+  });
+}
+
+Future<void> _insertFolder(
+  db.AppDatabase database,
+  String id,
+  String name, {
+  String accountId = 'account',
+}) {
+  return database
+      .into(database.mailFolders)
+      .insert(
+        db.MailFoldersCompanion.insert(
+          id: id,
+          accountId: accountId,
+          name: name,
+          path: name,
+          isInbox: name == 'INBOX',
+        ),
+      );
+}
+
+Future<void> _insertDetail(
+  db.AppDatabase database, {
+  required String id,
+  required String accountId,
+  required String folderId,
+  required String subject,
+  required String sender,
+  required String recipients,
+  required DateTime receivedAt,
+  String bodyPlain = 'Body',
+  String? messageIdHeader,
+  String? inReplyToHeader,
+  String? referencesHeader,
+}) {
+  return database
+      .into(database.messageDetails)
+      .insert(
+        db.MessageDetailsCompanion.insert(
+          id: id,
+          accountId: Value(accountId),
+          folderId: Value(folderId),
+          subject: subject,
+          sender: sender,
+          recipients: recipients,
+          bodyPlain: bodyPlain,
+          bodyHtml: const Value(null),
+          receivedAt: receivedAt,
+          messageIdHeader: Value(messageIdHeader),
+          inReplyToHeader: Value(inReplyToHeader),
+          referencesHeader: Value(referencesHeader),
+        ),
+      );
 }

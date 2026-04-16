@@ -1620,6 +1620,18 @@ class $MessageDetailsTable extends MessageDetails
     requiredDuringInsert: false,
     defaultValue: const Constant('default'),
   );
+  static const VerificationMeta _folderIdMeta = const VerificationMeta(
+    'folderId',
+  );
+  @override
+  late final GeneratedColumn<String> folderId = GeneratedColumn<String>(
+    'folder_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
   static const VerificationMeta _subjectMeta = const VerificationMeta(
     'subject',
   );
@@ -1684,16 +1696,53 @@ class $MessageDetailsTable extends MessageDetails
     type: DriftSqlType.dateTime,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _messageIdHeaderMeta = const VerificationMeta(
+    'messageIdHeader',
+  );
+  @override
+  late final GeneratedColumn<String> messageIdHeader = GeneratedColumn<String>(
+    'message_id_header',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _inReplyToHeaderMeta = const VerificationMeta(
+    'inReplyToHeader',
+  );
+  @override
+  late final GeneratedColumn<String> inReplyToHeader = GeneratedColumn<String>(
+    'in_reply_to_header',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _referencesHeaderMeta = const VerificationMeta(
+    'referencesHeader',
+  );
+  @override
+  late final GeneratedColumn<String> referencesHeader = GeneratedColumn<String>(
+    'references_header',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
     accountId,
+    folderId,
     subject,
     sender,
     recipients,
     bodyPlain,
     bodyHtml,
     receivedAt,
+    messageIdHeader,
+    inReplyToHeader,
+    referencesHeader,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1716,6 +1765,12 @@ class $MessageDetailsTable extends MessageDetails
       context.handle(
         _accountIdMeta,
         accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    }
+    if (data.containsKey('folder_id')) {
+      context.handle(
+        _folderIdMeta,
+        folderId.isAcceptableOrUnknown(data['folder_id']!, _folderIdMeta),
       );
     }
     if (data.containsKey('subject')) {
@@ -1764,6 +1819,33 @@ class $MessageDetailsTable extends MessageDetails
     } else if (isInserting) {
       context.missing(_receivedAtMeta);
     }
+    if (data.containsKey('message_id_header')) {
+      context.handle(
+        _messageIdHeaderMeta,
+        messageIdHeader.isAcceptableOrUnknown(
+          data['message_id_header']!,
+          _messageIdHeaderMeta,
+        ),
+      );
+    }
+    if (data.containsKey('in_reply_to_header')) {
+      context.handle(
+        _inReplyToHeaderMeta,
+        inReplyToHeader.isAcceptableOrUnknown(
+          data['in_reply_to_header']!,
+          _inReplyToHeaderMeta,
+        ),
+      );
+    }
+    if (data.containsKey('references_header')) {
+      context.handle(
+        _referencesHeaderMeta,
+        referencesHeader.isAcceptableOrUnknown(
+          data['references_header']!,
+          _referencesHeaderMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -1780,6 +1862,10 @@ class $MessageDetailsTable extends MessageDetails
       accountId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}account_id'],
+      )!,
+      folderId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}folder_id'],
       )!,
       subject: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
@@ -1805,6 +1891,18 @@ class $MessageDetailsTable extends MessageDetails
         DriftSqlType.dateTime,
         data['${effectivePrefix}received_at'],
       )!,
+      messageIdHeader: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}message_id_header'],
+      ),
+      inReplyToHeader: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}in_reply_to_header'],
+      ),
+      referencesHeader: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}references_header'],
+      ),
     );
   }
 
@@ -1817,27 +1915,36 @@ class $MessageDetailsTable extends MessageDetails
 class MessageDetail extends DataClass implements Insertable<MessageDetail> {
   final String id;
   final String accountId;
+  final String folderId;
   final String subject;
   final String sender;
   final String recipients;
   final String bodyPlain;
   final String? bodyHtml;
   final DateTime receivedAt;
+  final String? messageIdHeader;
+  final String? inReplyToHeader;
+  final String? referencesHeader;
   const MessageDetail({
     required this.id,
     required this.accountId,
+    required this.folderId,
     required this.subject,
     required this.sender,
     required this.recipients,
     required this.bodyPlain,
     this.bodyHtml,
     required this.receivedAt,
+    this.messageIdHeader,
+    this.inReplyToHeader,
+    this.referencesHeader,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
     map['id'] = Variable<String>(id);
     map['account_id'] = Variable<String>(accountId);
+    map['folder_id'] = Variable<String>(folderId);
     map['subject'] = Variable<String>(subject);
     map['sender'] = Variable<String>(sender);
     map['recipients'] = Variable<String>(recipients);
@@ -1846,6 +1953,15 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
       map['body_html'] = Variable<String>(bodyHtml);
     }
     map['received_at'] = Variable<DateTime>(receivedAt);
+    if (!nullToAbsent || messageIdHeader != null) {
+      map['message_id_header'] = Variable<String>(messageIdHeader);
+    }
+    if (!nullToAbsent || inReplyToHeader != null) {
+      map['in_reply_to_header'] = Variable<String>(inReplyToHeader);
+    }
+    if (!nullToAbsent || referencesHeader != null) {
+      map['references_header'] = Variable<String>(referencesHeader);
+    }
     return map;
   }
 
@@ -1853,6 +1969,7 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
     return MessageDetailsCompanion(
       id: Value(id),
       accountId: Value(accountId),
+      folderId: Value(folderId),
       subject: Value(subject),
       sender: Value(sender),
       recipients: Value(recipients),
@@ -1861,6 +1978,15 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
           ? const Value.absent()
           : Value(bodyHtml),
       receivedAt: Value(receivedAt),
+      messageIdHeader: messageIdHeader == null && nullToAbsent
+          ? const Value.absent()
+          : Value(messageIdHeader),
+      inReplyToHeader: inReplyToHeader == null && nullToAbsent
+          ? const Value.absent()
+          : Value(inReplyToHeader),
+      referencesHeader: referencesHeader == null && nullToAbsent
+          ? const Value.absent()
+          : Value(referencesHeader),
     );
   }
 
@@ -1872,12 +1998,16 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
     return MessageDetail(
       id: serializer.fromJson<String>(json['id']),
       accountId: serializer.fromJson<String>(json['accountId']),
+      folderId: serializer.fromJson<String>(json['folderId']),
       subject: serializer.fromJson<String>(json['subject']),
       sender: serializer.fromJson<String>(json['sender']),
       recipients: serializer.fromJson<String>(json['recipients']),
       bodyPlain: serializer.fromJson<String>(json['bodyPlain']),
       bodyHtml: serializer.fromJson<String?>(json['bodyHtml']),
       receivedAt: serializer.fromJson<DateTime>(json['receivedAt']),
+      messageIdHeader: serializer.fromJson<String?>(json['messageIdHeader']),
+      inReplyToHeader: serializer.fromJson<String?>(json['inReplyToHeader']),
+      referencesHeader: serializer.fromJson<String?>(json['referencesHeader']),
     );
   }
   @override
@@ -1886,38 +2016,57 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
     return <String, dynamic>{
       'id': serializer.toJson<String>(id),
       'accountId': serializer.toJson<String>(accountId),
+      'folderId': serializer.toJson<String>(folderId),
       'subject': serializer.toJson<String>(subject),
       'sender': serializer.toJson<String>(sender),
       'recipients': serializer.toJson<String>(recipients),
       'bodyPlain': serializer.toJson<String>(bodyPlain),
       'bodyHtml': serializer.toJson<String?>(bodyHtml),
       'receivedAt': serializer.toJson<DateTime>(receivedAt),
+      'messageIdHeader': serializer.toJson<String?>(messageIdHeader),
+      'inReplyToHeader': serializer.toJson<String?>(inReplyToHeader),
+      'referencesHeader': serializer.toJson<String?>(referencesHeader),
     };
   }
 
   MessageDetail copyWith({
     String? id,
     String? accountId,
+    String? folderId,
     String? subject,
     String? sender,
     String? recipients,
     String? bodyPlain,
     Value<String?> bodyHtml = const Value.absent(),
     DateTime? receivedAt,
+    Value<String?> messageIdHeader = const Value.absent(),
+    Value<String?> inReplyToHeader = const Value.absent(),
+    Value<String?> referencesHeader = const Value.absent(),
   }) => MessageDetail(
     id: id ?? this.id,
     accountId: accountId ?? this.accountId,
+    folderId: folderId ?? this.folderId,
     subject: subject ?? this.subject,
     sender: sender ?? this.sender,
     recipients: recipients ?? this.recipients,
     bodyPlain: bodyPlain ?? this.bodyPlain,
     bodyHtml: bodyHtml.present ? bodyHtml.value : this.bodyHtml,
     receivedAt: receivedAt ?? this.receivedAt,
+    messageIdHeader: messageIdHeader.present
+        ? messageIdHeader.value
+        : this.messageIdHeader,
+    inReplyToHeader: inReplyToHeader.present
+        ? inReplyToHeader.value
+        : this.inReplyToHeader,
+    referencesHeader: referencesHeader.present
+        ? referencesHeader.value
+        : this.referencesHeader,
   );
   MessageDetail copyWithCompanion(MessageDetailsCompanion data) {
     return MessageDetail(
       id: data.id.present ? data.id.value : this.id,
       accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      folderId: data.folderId.present ? data.folderId.value : this.folderId,
       subject: data.subject.present ? data.subject.value : this.subject,
       sender: data.sender.present ? data.sender.value : this.sender,
       recipients: data.recipients.present
@@ -1928,6 +2077,15 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
       receivedAt: data.receivedAt.present
           ? data.receivedAt.value
           : this.receivedAt,
+      messageIdHeader: data.messageIdHeader.present
+          ? data.messageIdHeader.value
+          : this.messageIdHeader,
+      inReplyToHeader: data.inReplyToHeader.present
+          ? data.inReplyToHeader.value
+          : this.inReplyToHeader,
+      referencesHeader: data.referencesHeader.present
+          ? data.referencesHeader.value
+          : this.referencesHeader,
     );
   }
 
@@ -1936,12 +2094,16 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
     return (StringBuffer('MessageDetail(')
           ..write('id: $id, ')
           ..write('accountId: $accountId, ')
+          ..write('folderId: $folderId, ')
           ..write('subject: $subject, ')
           ..write('sender: $sender, ')
           ..write('recipients: $recipients, ')
           ..write('bodyPlain: $bodyPlain, ')
           ..write('bodyHtml: $bodyHtml, ')
-          ..write('receivedAt: $receivedAt')
+          ..write('receivedAt: $receivedAt, ')
+          ..write('messageIdHeader: $messageIdHeader, ')
+          ..write('inReplyToHeader: $inReplyToHeader, ')
+          ..write('referencesHeader: $referencesHeader')
           ..write(')'))
         .toString();
   }
@@ -1950,12 +2112,16 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
   int get hashCode => Object.hash(
     id,
     accountId,
+    folderId,
     subject,
     sender,
     recipients,
     bodyPlain,
     bodyHtml,
     receivedAt,
+    messageIdHeader,
+    inReplyToHeader,
+    referencesHeader,
   );
   @override
   bool operator ==(Object other) =>
@@ -1963,44 +2129,60 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
       (other is MessageDetail &&
           other.id == this.id &&
           other.accountId == this.accountId &&
+          other.folderId == this.folderId &&
           other.subject == this.subject &&
           other.sender == this.sender &&
           other.recipients == this.recipients &&
           other.bodyPlain == this.bodyPlain &&
           other.bodyHtml == this.bodyHtml &&
-          other.receivedAt == this.receivedAt);
+          other.receivedAt == this.receivedAt &&
+          other.messageIdHeader == this.messageIdHeader &&
+          other.inReplyToHeader == this.inReplyToHeader &&
+          other.referencesHeader == this.referencesHeader);
 }
 
 class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
   final Value<String> id;
   final Value<String> accountId;
+  final Value<String> folderId;
   final Value<String> subject;
   final Value<String> sender;
   final Value<String> recipients;
   final Value<String> bodyPlain;
   final Value<String?> bodyHtml;
   final Value<DateTime> receivedAt;
+  final Value<String?> messageIdHeader;
+  final Value<String?> inReplyToHeader;
+  final Value<String?> referencesHeader;
   final Value<int> rowid;
   const MessageDetailsCompanion({
     this.id = const Value.absent(),
     this.accountId = const Value.absent(),
+    this.folderId = const Value.absent(),
     this.subject = const Value.absent(),
     this.sender = const Value.absent(),
     this.recipients = const Value.absent(),
     this.bodyPlain = const Value.absent(),
     this.bodyHtml = const Value.absent(),
     this.receivedAt = const Value.absent(),
+    this.messageIdHeader = const Value.absent(),
+    this.inReplyToHeader = const Value.absent(),
+    this.referencesHeader = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MessageDetailsCompanion.insert({
     required String id,
     this.accountId = const Value.absent(),
+    this.folderId = const Value.absent(),
     required String subject,
     required String sender,
     required String recipients,
     required String bodyPlain,
     this.bodyHtml = const Value.absent(),
     required DateTime receivedAt,
+    this.messageIdHeader = const Value.absent(),
+    this.inReplyToHeader = const Value.absent(),
+    this.referencesHeader = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        subject = Value(subject),
@@ -2011,23 +2193,31 @@ class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
   static Insertable<MessageDetail> custom({
     Expression<String>? id,
     Expression<String>? accountId,
+    Expression<String>? folderId,
     Expression<String>? subject,
     Expression<String>? sender,
     Expression<String>? recipients,
     Expression<String>? bodyPlain,
     Expression<String>? bodyHtml,
     Expression<DateTime>? receivedAt,
+    Expression<String>? messageIdHeader,
+    Expression<String>? inReplyToHeader,
+    Expression<String>? referencesHeader,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
       if (accountId != null) 'account_id': accountId,
+      if (folderId != null) 'folder_id': folderId,
       if (subject != null) 'subject': subject,
       if (sender != null) 'sender': sender,
       if (recipients != null) 'recipients': recipients,
       if (bodyPlain != null) 'body_plain': bodyPlain,
       if (bodyHtml != null) 'body_html': bodyHtml,
       if (receivedAt != null) 'received_at': receivedAt,
+      if (messageIdHeader != null) 'message_id_header': messageIdHeader,
+      if (inReplyToHeader != null) 'in_reply_to_header': inReplyToHeader,
+      if (referencesHeader != null) 'references_header': referencesHeader,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -2035,23 +2225,31 @@ class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
   MessageDetailsCompanion copyWith({
     Value<String>? id,
     Value<String>? accountId,
+    Value<String>? folderId,
     Value<String>? subject,
     Value<String>? sender,
     Value<String>? recipients,
     Value<String>? bodyPlain,
     Value<String?>? bodyHtml,
     Value<DateTime>? receivedAt,
+    Value<String?>? messageIdHeader,
+    Value<String?>? inReplyToHeader,
+    Value<String?>? referencesHeader,
     Value<int>? rowid,
   }) {
     return MessageDetailsCompanion(
       id: id ?? this.id,
       accountId: accountId ?? this.accountId,
+      folderId: folderId ?? this.folderId,
       subject: subject ?? this.subject,
       sender: sender ?? this.sender,
       recipients: recipients ?? this.recipients,
       bodyPlain: bodyPlain ?? this.bodyPlain,
       bodyHtml: bodyHtml ?? this.bodyHtml,
       receivedAt: receivedAt ?? this.receivedAt,
+      messageIdHeader: messageIdHeader ?? this.messageIdHeader,
+      inReplyToHeader: inReplyToHeader ?? this.inReplyToHeader,
+      referencesHeader: referencesHeader ?? this.referencesHeader,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -2064,6 +2262,9 @@ class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
     }
     if (accountId.present) {
       map['account_id'] = Variable<String>(accountId.value);
+    }
+    if (folderId.present) {
+      map['folder_id'] = Variable<String>(folderId.value);
     }
     if (subject.present) {
       map['subject'] = Variable<String>(subject.value);
@@ -2083,6 +2284,15 @@ class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
     if (receivedAt.present) {
       map['received_at'] = Variable<DateTime>(receivedAt.value);
     }
+    if (messageIdHeader.present) {
+      map['message_id_header'] = Variable<String>(messageIdHeader.value);
+    }
+    if (inReplyToHeader.present) {
+      map['in_reply_to_header'] = Variable<String>(inReplyToHeader.value);
+    }
+    if (referencesHeader.present) {
+      map['references_header'] = Variable<String>(referencesHeader.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -2094,12 +2304,16 @@ class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
     return (StringBuffer('MessageDetailsCompanion(')
           ..write('id: $id, ')
           ..write('accountId: $accountId, ')
+          ..write('folderId: $folderId, ')
           ..write('subject: $subject, ')
           ..write('sender: $sender, ')
           ..write('recipients: $recipients, ')
           ..write('bodyPlain: $bodyPlain, ')
           ..write('bodyHtml: $bodyHtml, ')
           ..write('receivedAt: $receivedAt, ')
+          ..write('messageIdHeader: $messageIdHeader, ')
+          ..write('inReplyToHeader: $inReplyToHeader, ')
+          ..write('referencesHeader: $referencesHeader, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -3398,24 +3612,32 @@ typedef $$MessageDetailsTableCreateCompanionBuilder =
     MessageDetailsCompanion Function({
       required String id,
       Value<String> accountId,
+      Value<String> folderId,
       required String subject,
       required String sender,
       required String recipients,
       required String bodyPlain,
       Value<String?> bodyHtml,
       required DateTime receivedAt,
+      Value<String?> messageIdHeader,
+      Value<String?> inReplyToHeader,
+      Value<String?> referencesHeader,
       Value<int> rowid,
     });
 typedef $$MessageDetailsTableUpdateCompanionBuilder =
     MessageDetailsCompanion Function({
       Value<String> id,
       Value<String> accountId,
+      Value<String> folderId,
       Value<String> subject,
       Value<String> sender,
       Value<String> recipients,
       Value<String> bodyPlain,
       Value<String?> bodyHtml,
       Value<DateTime> receivedAt,
+      Value<String?> messageIdHeader,
+      Value<String?> inReplyToHeader,
+      Value<String?> referencesHeader,
       Value<int> rowid,
     });
 
@@ -3435,6 +3657,11 @@ class $$MessageDetailsTableFilterComposer
 
   ColumnFilters<String> get accountId => $composableBuilder(
     column: $table.accountId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get folderId => $composableBuilder(
+    column: $table.folderId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3467,6 +3694,21 @@ class $$MessageDetailsTableFilterComposer
     column: $table.receivedAt,
     builder: (column) => ColumnFilters(column),
   );
+
+  ColumnFilters<String> get messageIdHeader => $composableBuilder(
+    column: $table.messageIdHeader,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get inReplyToHeader => $composableBuilder(
+    column: $table.inReplyToHeader,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get referencesHeader => $composableBuilder(
+    column: $table.referencesHeader,
+    builder: (column) => ColumnFilters(column),
+  );
 }
 
 class $$MessageDetailsTableOrderingComposer
@@ -3485,6 +3727,11 @@ class $$MessageDetailsTableOrderingComposer
 
   ColumnOrderings<String> get accountId => $composableBuilder(
     column: $table.accountId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get folderId => $composableBuilder(
+    column: $table.folderId,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -3517,6 +3764,21 @@ class $$MessageDetailsTableOrderingComposer
     column: $table.receivedAt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get messageIdHeader => $composableBuilder(
+    column: $table.messageIdHeader,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get inReplyToHeader => $composableBuilder(
+    column: $table.inReplyToHeader,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get referencesHeader => $composableBuilder(
+    column: $table.referencesHeader,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$MessageDetailsTableAnnotationComposer
@@ -3533,6 +3795,9 @@ class $$MessageDetailsTableAnnotationComposer
 
   GeneratedColumn<String> get accountId =>
       $composableBuilder(column: $table.accountId, builder: (column) => column);
+
+  GeneratedColumn<String> get folderId =>
+      $composableBuilder(column: $table.folderId, builder: (column) => column);
 
   GeneratedColumn<String> get subject =>
       $composableBuilder(column: $table.subject, builder: (column) => column);
@@ -3553,6 +3818,21 @@ class $$MessageDetailsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get receivedAt => $composableBuilder(
     column: $table.receivedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get messageIdHeader => $composableBuilder(
+    column: $table.messageIdHeader,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get inReplyToHeader => $composableBuilder(
+    column: $table.inReplyToHeader,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get referencesHeader => $composableBuilder(
+    column: $table.referencesHeader,
     builder: (column) => column,
   );
 }
@@ -3592,44 +3872,60 @@ class $$MessageDetailsTableTableManager
               ({
                 Value<String> id = const Value.absent(),
                 Value<String> accountId = const Value.absent(),
+                Value<String> folderId = const Value.absent(),
                 Value<String> subject = const Value.absent(),
                 Value<String> sender = const Value.absent(),
                 Value<String> recipients = const Value.absent(),
                 Value<String> bodyPlain = const Value.absent(),
                 Value<String?> bodyHtml = const Value.absent(),
                 Value<DateTime> receivedAt = const Value.absent(),
+                Value<String?> messageIdHeader = const Value.absent(),
+                Value<String?> inReplyToHeader = const Value.absent(),
+                Value<String?> referencesHeader = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessageDetailsCompanion(
                 id: id,
                 accountId: accountId,
+                folderId: folderId,
                 subject: subject,
                 sender: sender,
                 recipients: recipients,
                 bodyPlain: bodyPlain,
                 bodyHtml: bodyHtml,
                 receivedAt: receivedAt,
+                messageIdHeader: messageIdHeader,
+                inReplyToHeader: inReplyToHeader,
+                referencesHeader: referencesHeader,
                 rowid: rowid,
               ),
           createCompanionCallback:
               ({
                 required String id,
                 Value<String> accountId = const Value.absent(),
+                Value<String> folderId = const Value.absent(),
                 required String subject,
                 required String sender,
                 required String recipients,
                 required String bodyPlain,
                 Value<String?> bodyHtml = const Value.absent(),
                 required DateTime receivedAt,
+                Value<String?> messageIdHeader = const Value.absent(),
+                Value<String?> inReplyToHeader = const Value.absent(),
+                Value<String?> referencesHeader = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessageDetailsCompanion.insert(
                 id: id,
                 accountId: accountId,
+                folderId: folderId,
                 subject: subject,
                 sender: sender,
                 recipients: recipients,
                 bodyPlain: bodyPlain,
                 bodyHtml: bodyHtml,
                 receivedAt: receivedAt,
+                messageIdHeader: messageIdHeader,
+                inReplyToHeader: inReplyToHeader,
+                referencesHeader: referencesHeader,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

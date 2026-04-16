@@ -7,6 +7,7 @@ import '../../../core/result/result.dart';
 import '../../../data/local/app_database.dart';
 import '../../../data/secure/secure_storage_service.dart';
 import '../domain/entities/outgoing_message.dart';
+import '../domain/entities/reply_context.dart';
 import '../domain/repositories/compose_repository.dart';
 
 class ComposeRepositoryImpl implements ComposeRepository {
@@ -64,13 +65,18 @@ class ComposeRepositoryImpl implements ComposeRepository {
         bcc: message.bcc.map((email) => MailAddress(null, email)).toList(),
         subject: message.subject,
       );
+      _applyReplyHeaders(mimeMessage, message);
       await smtpClient.sendMessage(mimeMessage);
       await _appendToSentFolder(
         account: account,
         password: password,
         mimeMessage: mimeMessage,
       );
-      await _cacheSentMessage(account: account, message: message);
+      await _cacheSentMessage(
+        account: account,
+        message: message,
+        mimeMessage: mimeMessage,
+      );
 
       _logger.i(
         'Sent SMTP message to ${message.to.join(', ')} from ${message.accountId}',
@@ -140,6 +146,7 @@ class ComposeRepositoryImpl implements ComposeRepository {
   Future<void> _cacheSentMessage({
     required Account account,
     required OutgoingMessage message,
+    required MimeMessage mimeMessage,
   }) async {
     final sentPath = await _sentFolderPath(account.id);
     final sentFolderId = _folderId(account.id, sentPath);
@@ -171,6 +178,10 @@ class ComposeRepositoryImpl implements ComposeRepository {
           bodyPlain: message.body,
           bodyHtml: const Value(null),
           receivedAt: sentAt,
+          folderId: Value(sentFolderId),
+          messageIdHeader: Value(mimeMessage.getHeaderValue('Message-Id')),
+          inReplyToHeader: Value(mimeMessage.getHeaderValue('In-Reply-To')),
+          referencesHeader: Value(mimeMessage.getHeaderValue('References')),
         ),
         mode: InsertMode.insertOrReplace,
       );
@@ -191,6 +202,28 @@ class ComposeRepositoryImpl implements ComposeRepository {
         mode: InsertMode.insertOrReplace,
       );
     });
+  }
+
+  void _applyReplyHeaders(MimeMessage mimeMessage, OutgoingMessage message) {
+    final context = message.replyContext;
+    if (context == null || context.action == ReplyAction.forward) {
+      return;
+    }
+
+    final originalMessageId = context.originalMessageIdHeader?.trim();
+    if (originalMessageId == null || originalMessageId.isEmpty) {
+      return;
+    }
+
+    mimeMessage.setHeader('In-Reply-To', originalMessageId);
+    final references = [
+      ...?context.originalReferencesHeader
+          ?.split(RegExp(r'\s+'))
+          .map((value) => value.trim())
+          .where((value) => value.isNotEmpty),
+      originalMessageId,
+    ];
+    mimeMessage.setHeader('References', references.toSet().join(' '));
   }
 
   String _folderId(String accountId, String path) {

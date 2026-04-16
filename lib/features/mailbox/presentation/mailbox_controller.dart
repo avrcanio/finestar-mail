@@ -5,6 +5,7 @@ import '../../auth/presentation/auth_controller.dart';
 import '../domain/entities/mail_folder.dart';
 import '../domain/entities/mail_message_detail.dart';
 import '../domain/entities/mail_message_summary.dart';
+import '../domain/entities/mail_thread.dart';
 
 final foldersProvider = FutureProvider<List<MailFolder>>((ref) {
   final account = ref.watch(activeAccountProvider).asData?.value;
@@ -25,6 +26,19 @@ final messageDetailProvider = FutureProvider.family<MailMessageDetail, String>((
   return ref
       .watch(mailboxRepositoryProvider)
       .getMessageDetail(accountId: account.id, id: messageId);
+});
+
+final messageThreadProvider = FutureProvider.family<MailThread, String>((
+  ref,
+  messageId,
+) {
+  final account = ref.watch(activeAccountProvider).asData?.value;
+  if (account == null) {
+    throw StateError('No active account selected.');
+  }
+  return ref
+      .watch(mailboxRepositoryProvider)
+      .getMessageThread(accountId: account.id, messageId: messageId);
 });
 
 final folderMessagesProvider = FutureProvider.autoDispose

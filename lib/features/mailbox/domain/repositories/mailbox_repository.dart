@@ -1,6 +1,7 @@
 import '../entities/mail_folder.dart';
 import '../entities/mail_message_detail.dart';
 import '../entities/mail_message_summary.dart';
+import '../entities/mail_thread.dart';
 
 abstract class MailboxRepository {
   Future<List<MailFolder>> getFolders(String accountId);
@@ -23,6 +24,11 @@ abstract class MailboxRepository {
   Future<MailMessageDetail> getMessageDetail({
     required String accountId,
     required String id,
+  });
+
+  Future<MailThread> getMessageThread({
+    required String accountId,
+    required String messageId,
   });
 
   Future<List<MailMessageSummary>> searchMessages({
