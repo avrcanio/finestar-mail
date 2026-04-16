@@ -51,11 +51,18 @@ class BackendMailApiClient {
     required String token,
     required String folder,
     required int limit,
+    String? beforeUid,
   }) async {
+    final trimmedBeforeUid = beforeUid?.trim();
     final json = await _requestJson(
       method: 'GET',
       path: '/api/mail/messages',
-      queryParameters: {'folder': folder, 'limit': '$limit'},
+      queryParameters: {
+        'folder': folder,
+        'limit': '$limit',
+        if (trimmedBeforeUid != null && trimmedBeforeUid.isNotEmpty)
+          'before_uid': trimmedBeforeUid,
+      },
       token: token,
     );
     return BackendMessagesResponse.fromJson(json);
@@ -185,7 +192,7 @@ class BackendMailApiException implements Exception {
         currentCode == 'not_authenticated') {
       return 'Mailbox authentication failed. Check your email and password.';
     }
-    if (currentCode == 'invalid_limit') {
+    if (currentCode == 'invalid_limit' || currentCode == 'invalid_before_uid') {
       return 'The mailbox request was invalid.';
     }
     if (currentCode == 'mail_timeout') {
@@ -294,19 +301,28 @@ class BackendMessagesResponse {
     required this.accountEmail,
     required this.folder,
     required this.messages,
+    required this.hasMore,
+    this.nextBeforeUid,
   });
 
   final String accountEmail;
   final String folder;
   final List<BackendMessageSummaryDto> messages;
+  final bool hasMore;
+  final String? nextBeforeUid;
 
   factory BackendMessagesResponse.fromJson(Map<String, dynamic> json) {
+    final nextBeforeUid = json['next_before_uid']?.toString().trim();
     return BackendMessagesResponse(
       accountEmail: json['account_email'] as String? ?? '',
       folder: json['folder'] as String? ?? 'INBOX',
       messages: _listOfObjects(
         json['messages'],
       ).map(BackendMessageSummaryDto.fromJson).toList(),
+      hasMore: json['has_more'] as bool? ?? false,
+      nextBeforeUid: nextBeforeUid == null || nextBeforeUid.isEmpty
+          ? null
+          : nextBeforeUid,
     );
   }
 }

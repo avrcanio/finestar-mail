@@ -325,28 +325,69 @@ extension on NavigationDrawerDestination {
   }
 }
 
-class _MailboxContent extends ConsumerWidget {
+class _MailboxContent extends ConsumerStatefulWidget {
   const _MailboxContent({required this.folder, required this.searchQuery});
 
   final MailFolder folder;
   final String searchQuery;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_MailboxContent> createState() => _MailboxContentState();
+}
+
+class _MailboxContentState extends ConsumerState<_MailboxContent> {
+  final _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_maybeLoadMore);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_maybeLoadMore);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _maybeLoadMore() {
+    if (widget.searchQuery.isNotEmpty || !_scrollController.hasClients) {
+      return;
+    }
+    final position = _scrollController.position;
+    if (position.extentAfter > 600) {
+      return;
+    }
+    ref
+        .read(mailboxMessagesControllerProvider(widget.folder).notifier)
+        .loadMore();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final folder = widget.folder;
+    final searchQuery = widget.searchQuery;
     final isSearching = searchQuery.isNotEmpty;
     final searchRequest = MailboxSearchRequest(
       folder: folder,
       query: searchQuery,
     );
-    final messagesAsync = isSearching
+    final searchAsync = isSearching
         ? ref.watch(mailboxSearchProvider(searchRequest))
-        : ref.watch(folderMessagesProvider(folder));
+        : null;
+    final pagedAsync = isSearching
+        ? null
+        : ref.watch(mailboxMessagesControllerProvider(folder));
 
     return RefreshIndicator(
       onRefresh: () => isSearching
           ? ref.refresh(mailboxSearchProvider(searchRequest).future)
-          : ref.refresh(folderMessagesProvider(folder).future),
+          : ref
+                .read(mailboxMessagesControllerProvider(folder).notifier)
+                .refresh(),
       child: ListView(
+        controller: _scrollController,
         padding: const EdgeInsets.fromLTRB(14, 8, 14, 96),
         children: [
           if (isSearching)
@@ -357,9 +398,12 @@ class _MailboxContent extends ConsumerWidget {
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
-          messagesAsync.when(
+          (isSearching ? searchAsync! : pagedAsync!).when(
             data: (messages) {
-              if (messages.isEmpty) {
+              final visibleMessages = isSearching
+                  ? messages as List<MailMessageSummary>
+                  : (messages as MailboxMessagesState).messages;
+              if (visibleMessages.isEmpty) {
                 return EmptyStateView(
                   title: isSearching ? 'No matching mail' : 'No messages yet',
                   message: isSearching
@@ -368,15 +412,74 @@ class _MailboxContent extends ConsumerWidget {
                 );
               }
 
-              return _MessageList(messages: messages, folder: folder);
+              return Column(
+                children: [
+                  _MessageList(messages: visibleMessages, folder: folder),
+                  if (!isSearching)
+                    _LoadMoreFooter(
+                      state: messages as MailboxMessagesState,
+                      onRetry: () => ref
+                          .read(
+                            mailboxMessagesControllerProvider(folder).notifier,
+                          )
+                          .loadMore(),
+                    ),
+                ],
+              );
             },
             error: (error, stackTrace) => ErrorStateView(
               message: error.toString(),
               onRetry: () => isSearching
                   ? ref.invalidate(mailboxSearchProvider(searchRequest))
-                  : ref.invalidate(folderMessagesProvider(folder)),
+                  : ref.invalidate(mailboxMessagesControllerProvider(folder)),
             ),
             loading: () => const Center(child: CircularProgressIndicator()),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LoadMoreFooter extends StatelessWidget {
+  const _LoadMoreFooter({required this.state, required this.onRetry});
+
+  final MailboxMessagesState state;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    if (state.isLoadingMore) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 18),
+        child: Center(
+          child: SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(strokeWidth: 2.5),
+          ),
+        ),
+      );
+    }
+
+    final error = state.loadMoreError;
+    if (error == null) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Column(
+        children: [
+          Text(
+            'Couldn\'t load older mail',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Retry'),
           ),
         ],
       ),
@@ -498,7 +601,7 @@ class _MessageList extends ConsumerWidget {
     Future<void> apply(Future<void> Function() action) async {
       Navigator.of(context).pop();
       await action();
-      ref.invalidate(folderMessagesProvider(folder));
+      ref.invalidate(mailboxMessagesControllerProvider(folder));
     }
 
     await showModalBottomSheet<void>(

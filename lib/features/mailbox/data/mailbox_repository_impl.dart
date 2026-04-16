@@ -5,6 +5,7 @@ import '../../../data/remote/backend_mail_api_client.dart';
 import '../../../data/secure/secure_storage_service.dart';
 import '../domain/entities/mail_folder.dart' as domain;
 import '../domain/entities/mail_message_detail.dart';
+import '../domain/entities/mail_message_page.dart';
 import '../domain/entities/mail_message_summary.dart';
 import '../domain/entities/mail_thread.dart';
 import '../domain/repositories/mailbox_repository.dart';
@@ -182,15 +183,14 @@ class MailboxRepositoryImpl implements MailboxRepository {
     int pageSize = 20,
     bool forceRefresh = false,
   }) async {
-    if (forceRefresh) {
-      final remoteMessages = await _fetchBackendMessages(
+    if (page == 0) {
+      final pageResult = await getMessagePage(
         accountId: accountId,
         folder: folder,
         pageSize: pageSize,
+        forceRefresh: forceRefresh,
       );
-      if (remoteMessages != null) {
-        return remoteMessages;
-      }
+      return pageResult.messages;
     }
 
     final cached =
@@ -217,10 +217,49 @@ class MailboxRepositoryImpl implements MailboxRepository {
     return _sortSummaries(cached.map(_summaryFromRow).toList());
   }
 
-  Future<List<MailMessageSummary>?> _fetchBackendMessages({
+  @override
+  Future<MailMessagePage> getMessagePage({
+    required String accountId,
+    required domain.MailFolder folder,
+    int pageSize = 50,
+    String? beforeUid,
+    bool forceRefresh = false,
+  }) async {
+    final remotePage = await _fetchBackendMessagePage(
+      accountId: accountId,
+      folder: folder,
+      pageSize: pageSize,
+      beforeUid: beforeUid,
+    );
+    if (remotePage != null) {
+      return remotePage;
+    }
+
+    final cachedPage = await _cachedMessagePage(
+      accountId: accountId,
+      folder: folder,
+      pageSize: pageSize,
+      beforeUid: beforeUid,
+    );
+    if (cachedPage.messages.isEmpty &&
+        folder.isInbox &&
+        _backendMailApiClient == null) {
+      await _cacheSeedMessages(accountId);
+      return _cachedMessagePage(
+        accountId: accountId,
+        folder: folder,
+        pageSize: pageSize,
+        beforeUid: beforeUid,
+      );
+    }
+    return cachedPage;
+  }
+
+  Future<MailMessagePage?> _fetchBackendMessagePage({
     required String accountId,
     required domain.MailFolder folder,
     required int pageSize,
+    String? beforeUid,
   }) async {
     final token = await _authToken(accountId);
     if (token == null) {
@@ -231,8 +270,55 @@ class MailboxRepositoryImpl implements MailboxRepository {
       token: token,
       folder: folder.path,
       limit: pageSize,
+      beforeUid: beforeUid,
     );
-    return _cacheBackendSummaries(accountId, folder, response.messages);
+    final summaries = await _cacheBackendSummaries(
+      accountId,
+      folder,
+      response.messages,
+    );
+    return MailMessagePage(
+      messages: summaries,
+      hasMore: response.hasMore,
+      nextBeforeUid: response.nextBeforeUid,
+    );
+  }
+
+  Future<MailMessagePage> _cachedMessagePage({
+    required String accountId,
+    required domain.MailFolder folder,
+    required int pageSize,
+    String? beforeUid,
+  }) async {
+    final rows =
+        await (_appDatabase.select(_appDatabase.messageSummaries)
+              ..where(
+                (table) =>
+                    table.accountId.equals(accountId) &
+                    table.folderId.equals(folder.id),
+              )
+              ..orderBy([(table) => OrderingTerm.desc(table.receivedAt)]))
+            .get();
+    final beforeUidNumber = int.tryParse(beforeUid?.trim() ?? '');
+    final eligible = rows.where((row) {
+      if (beforeUidNumber == null) {
+        return true;
+      }
+      final uidNumber = int.tryParse(_uidFromMessageId(row.id) ?? '');
+      return uidNumber != null && uidNumber < beforeUidNumber;
+    }).toList();
+    final selected = eligible.take(pageSize).map(_summaryFromRow).toList();
+    final rawNextBeforeUid = selected.isEmpty
+        ? null
+        : _uidFromMessageId(selected.last.id);
+    final hasMore =
+        eligible.length > selected.length && rawNextBeforeUid != null;
+
+    return MailMessagePage(
+      messages: _sortSummaries(selected),
+      hasMore: hasMore,
+      nextBeforeUid: hasMore ? rawNextBeforeUid : null,
+    );
   }
 
   Future<List<MailMessageSummary>> _cacheBackendSummaries(

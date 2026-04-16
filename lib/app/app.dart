@@ -184,7 +184,7 @@ class _FinestarMailAppState extends ConsumerState<FinestarMailApp>
         .syncInboxForPayload(payload)
         .then((synced) {
           if (synced && mounted) {
-            ref.invalidate(folderMessagesProvider);
+            ref.invalidate(mailboxMessagesControllerProvider);
           }
           return synced;
         })

@@ -71,11 +71,14 @@ void main() {
           );
         }
         if (request.url.path == '/api/mail/messages') {
+          expect(request.url.queryParameters['before_uid'], isNull);
           return http.Response(
             jsonEncode({
               'account_email': 'app-test-1@finestar.hr',
               'folder': 'INBOX',
               'messages': [],
+              'has_more': false,
+              'next_before_uid': null,
             }),
             200,
           );
@@ -147,6 +150,68 @@ void main() {
     ]);
   });
 
+  test(
+    'messages supports before_uid cursor and parses pagination envelope',
+    () async {
+      final requestedUris = <Uri>[];
+      final client = BackendMailApiClient(
+        httpClient: MockClient((request) async {
+          requestedUris.add(request.url);
+          expect(request.headers['Authorization'], 'Token session-token');
+          return http.Response(
+            jsonEncode({
+              'account_email': 'app-test-1@finestar.hr',
+              'folder': 'INBOX',
+              'messages': [
+                {
+                  'uid': '41',
+                  'folder': 'INBOX',
+                  'subject': 'Older message',
+                  'sender': 'sender@example.test',
+                  'to': ['app-test-1@finestar.hr'],
+                  'cc': [],
+                  'date': '2026-04-16T07:00:00Z',
+                  'message_id': '<older@example.test>',
+                  'flags': [],
+                  'size': 123,
+                },
+              ],
+              'has_more': true,
+              'next_before_uid': '40',
+            }),
+            200,
+          );
+        }),
+        baseUrlLoader: () async => 'https://mail.example.test',
+      );
+
+      final firstPage = await client.messages(
+        token: 'session-token',
+        folder: 'INBOX',
+        limit: 50,
+      );
+      final olderPage = await client.messages(
+        token: 'session-token',
+        folder: 'INBOX',
+        limit: 50,
+        beforeUid: '41',
+      );
+
+      expect(requestedUris.first.queryParameters, {
+        'folder': 'INBOX',
+        'limit': '50',
+      });
+      expect(requestedUris.last.queryParameters, {
+        'folder': 'INBOX',
+        'limit': '50',
+        'before_uid': '41',
+      });
+      expect(firstPage.hasMore, isTrue);
+      expect(firstPage.nextBeforeUid, '40');
+      expect(olderPage.messages.single.uid, '41');
+    },
+  );
+
   test('backend errors expose stable user-facing messages', () async {
     final client = BackendMailApiClient(
       httpClient: MockClient((request) async {
@@ -169,4 +234,38 @@ void main() {
       ),
     );
   });
+
+  test(
+    'pagination validation errors expose stable user-facing messages',
+    () async {
+      final client = BackendMailApiClient(
+        httpClient: MockClient((request) async {
+          return http.Response(
+            jsonEncode({
+              'error': 'invalid_before_uid',
+              'detail': 'before_uid must be numeric',
+            }),
+            400,
+          );
+        }),
+        baseUrlLoader: () async => 'https://mail.example.test',
+      );
+
+      await expectLater(
+        client.messages(
+          token: 'session-token',
+          folder: 'INBOX',
+          limit: 50,
+          beforeUid: 'bad',
+        ),
+        throwsA(
+          isA<BackendMailApiException>().having(
+            (error) => error.userMessage,
+            'message',
+            'The mailbox request was invalid.',
+          ),
+        ),
+      );
+    },
+  );
 }

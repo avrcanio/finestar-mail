@@ -5,9 +5,11 @@ import 'package:finestar_mail/features/auth/domain/entities/mail_account.dart';
 import 'package:finestar_mail/features/auth/presentation/auth_controller.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_summary.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_thread.dart';
 import 'package:finestar_mail/features/mailbox/domain/repositories/mailbox_repository.dart';
+import 'package:finestar_mail/features/mailbox/presentation/mailbox_controller.dart';
 import 'package:finestar_mail/features/mailbox/presentation/mailbox_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -102,6 +104,54 @@ void main() {
 
     expect(repository.messages.first.isRead, isTrue);
   });
+
+  testWidgets('scrolling near bottom appends older messages once', (
+    tester,
+  ) async {
+    final repository = _FakeMailboxRepository(initialMessageCount: 24);
+    await tester.pumpWidget(_buildTestApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Older backend page'), findsNothing);
+
+    await tester.drag(find.byType(ListView).last, const Offset(0, -2500));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Older backend page'), findsOneWidget);
+    expect(
+      repository.pageRequests.where((cursor) => cursor == '2'),
+      hasLength(1),
+    );
+  });
+
+  test('mailbox controller prevents duplicate concurrent load more', () async {
+    final repository = _FakeMailboxRepository(initialMessageCount: 8);
+    final container = ProviderContainer(
+      overrides: [
+        activeAccountProvider.overrideWith((ref) async => _account),
+        mailboxRepositoryProvider.overrideWith((ref) => repository),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await container.read(
+      mailboxMessagesControllerProvider(_inboxFolder).future,
+    );
+    final notifier = container.read(
+      mailboxMessagesControllerProvider(_inboxFolder).notifier,
+    );
+
+    await Future.wait([notifier.loadMore(), notifier.loadMore()]);
+
+    final state = container
+        .read(mailboxMessagesControllerProvider(_inboxFolder))
+        .value!;
+    expect(state.messages.last.subject, 'Older backend page');
+    expect(
+      repository.pageRequests.where((cursor) => cursor == '2'),
+      hasLength(1),
+    );
+  });
 }
 
 Widget _buildTestApp({_FakeMailboxRepository? repository}) {
@@ -146,8 +196,15 @@ final _account = MailAccount(
   createdAt: DateTime(2026, 4, 16),
 );
 
+const _inboxFolder = MailFolder(
+  id: 'app-test-2@finestar.hr:inbox',
+  name: 'INBOX',
+  path: 'INBOX',
+  isInbox: true,
+);
+
 class _FakeMailboxRepository implements MailboxRepository {
-  _FakeMailboxRepository()
+  _FakeMailboxRepository({int initialMessageCount = 2})
     : messages = [
         MailMessageSummary(
           id: 'app-test-2@finestar.hr:inbox:imap:2',
@@ -173,9 +230,27 @@ class _FakeMailboxRepository implements MailboxRepository {
           hasAttachments: false,
           sequence: 3,
         ),
+        for (var index = 4; index < initialMessageCount + 2; index++)
+          MailMessageSummary(
+            id: 'app-test-2@finestar.hr:inbox:imap:$index',
+            folderId: 'app-test-2@finestar.hr:inbox',
+            subject: 'Inbox message $index',
+            sender: 'team@finestar.hr',
+            preview: 'Extra message $index',
+            receivedAt: DateTime(
+              2026,
+              4,
+              16,
+              9,
+            ).subtract(Duration(minutes: index)),
+            isRead: true,
+            hasAttachments: false,
+            sequence: index,
+          ),
       ];
 
   final List<MailMessageSummary> messages;
+  final pageRequests = <String?>[];
 
   @override
   Future<List<MailFolder>> getFolders(String accountId) async => const [
@@ -249,6 +324,46 @@ class _FakeMailboxRepository implements MailboxRepository {
       ];
     }
     return messages;
+  }
+
+  @override
+  Future<MailMessagePage> getMessagePage({
+    required String accountId,
+    required MailFolder folder,
+    int pageSize = 50,
+    String? beforeUid,
+    bool forceRefresh = false,
+  }) async {
+    pageRequests.add(beforeUid);
+    if (beforeUid == '2') {
+      return MailMessagePage(
+        messages: [
+          MailMessageSummary(
+            id: '$accountId:inbox:api:1',
+            folderId: folder.id,
+            subject: 'Older backend page',
+            sender: 'archive@finestar.hr',
+            preview: 'Loaded from older cursor.',
+            receivedAt: DateTime(2026, 4, 15),
+            isRead: true,
+            hasAttachments: false,
+            sequence: 1,
+          ),
+        ],
+        hasMore: false,
+      );
+    }
+    final pageMessages = await getMessages(
+      accountId: accountId,
+      folder: folder,
+      pageSize: pageSize,
+      forceRefresh: forceRefresh,
+    );
+    return MailMessagePage(
+      messages: pageMessages,
+      hasMore: folder.path != 'Sent',
+      nextBeforeUid: folder.path == 'Sent' ? null : '2',
+    );
   }
 
   @override

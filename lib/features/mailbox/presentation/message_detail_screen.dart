@@ -118,7 +118,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
             isRead: true,
           );
       if (mounted) {
-        ref.invalidate(folderMessagesProvider);
+        ref.invalidate(mailboxMessagesControllerProvider);
       }
     });
   }

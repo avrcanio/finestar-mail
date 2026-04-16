@@ -10,6 +10,7 @@ import 'package:finestar_mail/features/auth/domain/entities/connection_settings.
 import 'package:finestar_mail/features/compose/data/compose_repository_impl.dart';
 import 'package:finestar_mail/features/compose/domain/entities/outgoing_message.dart';
 import 'package:finestar_mail/features/mailbox/data/mailbox_repository_impl.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -89,10 +90,13 @@ void main() {
             }
             if (request.url.path == '/api/mail/messages') {
               expect(request.url.queryParameters['folder'], 'INBOX');
+              expect(request.url.queryParameters['before_uid'], isNull);
               return http.Response(
                 jsonEncode({
                   'account_email': 'app-test-1@finestar.hr',
                   'folder': 'INBOX',
+                  'has_more': true,
+                  'next_before_uid': '42',
                   'messages': [
                     {
                       'uid': '42',
@@ -149,6 +153,14 @@ void main() {
       expect(summaries.single.id, 'app-test-1@finestar.hr:inbox:api:42');
       expect(summaries.single.isRead, isTrue);
 
+      final page = await repository.getMessagePage(
+        accountId: 'app-test-1@finestar.hr',
+        folder: folders.single,
+        forceRefresh: true,
+      );
+      expect(page.hasMore, isTrue);
+      expect(page.nextBeforeUid, '42');
+
       final detail = await repository.getMessageDetail(
         accountId: 'app-test-1@finestar.hr',
         id: summaries.single.id,
@@ -156,6 +168,94 @@ void main() {
       expect(detail.bodyPlain, 'Plain backend body');
     },
   );
+
+  test('mailbox repository requests and appends older backend page', () async {
+    final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+    final storage = _MemorySecureStorageService();
+    addTearDown(database.close);
+    await storage.saveAuthToken(
+      accountId: 'app-test-1@finestar.hr',
+      token: 'backend-token',
+    );
+
+    final requestedCursors = <String?>[];
+    const folder = MailFolder(
+      id: 'app-test-1@finestar.hr:inbox',
+      name: 'INBOX',
+      path: 'INBOX',
+      isInbox: true,
+    );
+    final inbox = db.MailFoldersCompanion.insert(
+      id: 'app-test-1@finestar.hr:inbox',
+      accountId: 'app-test-1@finestar.hr',
+      name: 'INBOX',
+      path: 'INBOX',
+      isInbox: true,
+    );
+    await database.into(database.mailFolders).insert(inbox);
+
+    final repository = MailboxRepositoryImpl(
+      appDatabase: database,
+      secureStorageService: storage,
+      backendMailApiClient: BackendMailApiClient(
+        httpClient: MockClient((request) async {
+          requestedCursors.add(request.url.queryParameters['before_uid']);
+          final isOlderPage = request.url.queryParameters['before_uid'] == '42';
+          return http.Response(
+            jsonEncode({
+              'account_email': 'app-test-1@finestar.hr',
+              'folder': 'INBOX',
+              'has_more': !isOlderPage,
+              'next_before_uid': isOlderPage ? null : '42',
+              'messages': [
+                {
+                  'uid': isOlderPage ? '41' : '42',
+                  'folder': 'INBOX',
+                  'subject': isOlderPage ? 'Older backend' : 'Newest backend',
+                  'sender': 'sender@example.test',
+                  'to': ['app-test-1@finestar.hr'],
+                  'cc': [],
+                  'date': isOlderPage
+                      ? '2026-04-16T06:00:00Z'
+                      : '2026-04-16T07:00:00Z',
+                  'message_id': isOlderPage
+                      ? '<older@example.test>'
+                      : '<newest@example.test>',
+                  'flags': [],
+                  'size': 123,
+                },
+              ],
+            }),
+            200,
+          );
+        }),
+        baseUrlLoader: () async => 'https://mail.example.test',
+      ),
+    );
+
+    final firstPage = await repository.getMessagePage(
+      accountId: 'app-test-1@finestar.hr',
+      folder: folder,
+      forceRefresh: true,
+    );
+    final olderPage = await repository.getMessagePage(
+      accountId: 'app-test-1@finestar.hr',
+      folder: folder,
+      beforeUid: firstPage.nextBeforeUid,
+    );
+
+    expect(requestedCursors, [null, '42']);
+    expect(firstPage.messages.single.id, 'app-test-1@finestar.hr:inbox:api:42');
+    expect(olderPage.messages.single.id, 'app-test-1@finestar.hr:inbox:api:41');
+    final cached = await database.select(database.messageSummaries).get();
+    expect(
+      cached.map((row) => row.id),
+      containsAll([
+        'app-test-1@finestar.hr:inbox:api:42',
+        'app-test-1@finestar.hr:inbox:api:41',
+      ]),
+    );
+  });
 
   test(
     'compose repository posts backend send payload and caches sent mail',

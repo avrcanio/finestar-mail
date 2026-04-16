@@ -7,6 +7,7 @@ import 'package:finestar_mail/features/auth/presentation/auth_controller.dart';
 import 'package:finestar_mail/features/compose/domain/entities/reply_context.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_summary.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_thread.dart';
 import 'package:finestar_mail/features/mailbox/domain/repositories/mailbox_repository.dart';
@@ -231,6 +232,15 @@ class _FakeMailboxRepository implements MailboxRepository {
     int pageSize = 20,
     bool forceRefresh = false,
   }) async => const [];
+
+  @override
+  Future<MailMessagePage> getMessagePage({
+    required String accountId,
+    required MailFolder folder,
+    int pageSize = 50,
+    String? beforeUid,
+    bool forceRefresh = false,
+  }) async => const MailMessagePage(messages: [], hasMore: false);
 
   @override
   Future<String?> findCachedMessageId({

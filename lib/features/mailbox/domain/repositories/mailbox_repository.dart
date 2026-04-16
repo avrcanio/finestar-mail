@@ -1,5 +1,6 @@
 import '../entities/mail_folder.dart';
 import '../entities/mail_message_detail.dart';
+import '../entities/mail_message_page.dart';
 import '../entities/mail_message_summary.dart';
 import '../entities/mail_thread.dart';
 
@@ -11,6 +12,14 @@ abstract class MailboxRepository {
     required MailFolder folder,
     int page = 0,
     int pageSize = 20,
+    bool forceRefresh = false,
+  });
+
+  Future<MailMessagePage> getMessagePage({
+    required String accountId,
+    required MailFolder folder,
+    int pageSize = 50,
+    String? beforeUid,
     bool forceRefresh = false,
   });
 
