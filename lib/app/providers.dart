@@ -12,6 +12,7 @@ import '../features/compose/data/compose_repository_impl.dart';
 import '../features/compose/domain/repositories/compose_repository.dart';
 import '../features/mailbox/data/mailbox_repository_impl.dart';
 import '../features/mailbox/domain/repositories/mailbox_repository.dart';
+import '../features/notifications/data/push_notification_service.dart';
 import '../features/settings/data/settings_repository_impl.dart';
 import '../features/settings/domain/repositories/settings_repository.dart';
 
@@ -64,4 +65,30 @@ final settingsRepositoryProvider = Provider<SettingsRepository>((ref) {
 
 final attachmentRepositoryProvider = Provider<AttachmentRepository>((ref) {
   return AttachmentRepositoryImpl();
+});
+
+final pushRegistrationStatusProvider =
+    NotifierProvider<PushRegistrationStatusController, PushRegistrationStatus>(
+      PushRegistrationStatusController.new,
+    );
+
+class PushRegistrationStatusController
+    extends Notifier<PushRegistrationStatus> {
+  @override
+  PushRegistrationStatus build() {
+    return PushRegistrationStatus.idle();
+  }
+
+  void setStatus(PushRegistrationStatus status) {
+    state = status;
+  }
+}
+
+final pushNotificationServiceProvider = Provider<PushNotificationService>((ref) {
+  return PushNotificationService(
+    logger: ref.watch(loggerProvider),
+    onStatusChanged: (status) {
+      ref.read(pushRegistrationStatusProvider.notifier).setStatus(status);
+    },
+  );
 });

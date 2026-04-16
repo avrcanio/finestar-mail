@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
 import '../../auth/domain/entities/mail_account.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../notifications/data/push_notification_service.dart';
 
 const _screenBackground = Color(0xFFF7F8FC);
 const _primary = Color(0xFF153B52);
@@ -19,6 +21,7 @@ class SettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final accountsAsync = ref.watch(accountsProvider);
     final activeAccountAsync = ref.watch(activeAccountProvider);
+    final pushStatus = ref.watch(pushRegistrationStatusProvider);
 
     return Scaffold(
       backgroundColor: _screenBackground,
@@ -67,6 +70,15 @@ class SettingsScreen extends ConsumerWidget {
                             ),
                           ),
                         ),
+                      _PushNotificationsCard(
+                        status: pushStatus,
+                        activeAccount: activeAccount,
+                        onRetry: activeAccount == null
+                            ? null
+                            : () => ref
+                                  .read(pushNotificationServiceProvider)
+                                  .registerAccount(activeAccount),
+                      ),
                       const SizedBox(height: 10),
                       _AddAccountButton(
                         label: 'Add another account',
@@ -119,6 +131,98 @@ class SettingsScreen extends ConsumerWidget {
     if (context.mounted && accountCount == 1) {
       context.go(AppRoute.login.path);
     }
+  }
+}
+
+class _PushNotificationsCard extends StatelessWidget {
+  const _PushNotificationsCard({
+    required this.status,
+    required this.activeAccount,
+    required this.onRetry,
+  });
+
+  final PushRegistrationStatus status;
+  final MailAccount? activeAccount;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final color = _statusColor();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(26),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 12, 18),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 22,
+                backgroundColor: color.withValues(alpha: .14),
+                child: Icon(_statusIcon(), color: color),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Push notifications',
+                      style: textTheme.titleMedium?.copyWith(
+                        color: const Color(0xFF202124),
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: .25,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      activeAccount == null
+                          ? 'Select or add an account first.'
+                          : status.message,
+                      style: textTheme.bodyMedium?.copyWith(
+                        color: _mutedText,
+                        fontSize: 14,
+                        letterSpacing: .2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Retry push registration',
+                onPressed: onRetry,
+                color: _mutedText,
+                icon: const Icon(Icons.refresh),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Color _statusColor() {
+    return switch (status.state) {
+      PushRegistrationState.success => const Color(0xFF137333),
+      PushRegistrationState.failure => const Color(0xFFC5221F),
+      PushRegistrationState.skipped => const Color(0xFFB06000),
+      PushRegistrationState.registering => _primary,
+      PushRegistrationState.idle => _mutedText,
+    };
+  }
+
+  IconData _statusIcon() {
+    return switch (status.state) {
+      PushRegistrationState.success => Icons.notifications_active_outlined,
+      PushRegistrationState.failure => Icons.error_outline,
+      PushRegistrationState.skipped => Icons.notifications_paused_outlined,
+      PushRegistrationState.registering => Icons.sync,
+      PushRegistrationState.idle => Icons.notifications_none_outlined,
+    };
   }
 }
 

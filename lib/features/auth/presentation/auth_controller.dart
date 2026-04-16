@@ -64,6 +64,7 @@ class AuthController extends AsyncNotifier<MailAccount?> {
       success: (account) {
         ref.invalidate(accountsProvider);
         ref.invalidate(activeAccountProvider);
+        ref.read(pushNotificationServiceProvider).registerAccount(account);
         state = AsyncData(account);
       },
       failure: (message) => state = AsyncError(message, StackTrace.current),
@@ -78,7 +79,11 @@ class AuthController extends AsyncNotifier<MailAccount?> {
     if (!ref.mounted) {
       return;
     }
-    state = AsyncData(await repository.getActiveAccount());
+    final account = await repository.getActiveAccount();
+    if (account != null) {
+      ref.read(pushNotificationServiceProvider).registerAccount(account);
+    }
+    state = AsyncData(account);
   }
 
   Future<void> removeAccount(String accountId) async {
