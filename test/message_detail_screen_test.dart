@@ -7,6 +7,7 @@ import 'package:finestar_mail/features/auth/presentation/auth_controller.dart';
 import 'package:finestar_mail/features/compose/domain/entities/reply_context.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_delete_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_attachment.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_summary.dart';
@@ -99,6 +100,49 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(repository.markedReadMessageIds, contains(_secondMessage.id));
+  });
+
+  testWidgets('message detail renders attachment metadata', (tester) async {
+    final attachmentMessage = MailThreadMessage(
+      id: 'avrcan@finestar.hr:inbox:api:42',
+      folderId: 'avrcan@finestar.hr:inbox',
+      folderName: 'INBOX',
+      subject: 'Attachment smoke',
+      sender: 'ante@vitalgroupsa.com',
+      recipients: const ['avrcan@finestar.hr'],
+      bodyPlain: 'See attachment.',
+      bodyHtml: null,
+      receivedAt: DateTime(2026, 4, 16, 10),
+      messageIdHeader: '<attachment@finestar.hr>',
+      inReplyToHeader: null,
+      referencesHeader: null,
+      attachments: const [
+        MailMessageAttachment(
+          id: 'att_1',
+          filename: 'smoke.txt',
+          contentType: 'text/plain',
+          sizeBytes: 2,
+          disposition: 'attachment',
+          isInline: false,
+        ),
+      ],
+    );
+    final thread = MailThread(
+      subject: 'Attachment smoke',
+      selectedMessageId: attachmentMessage.id,
+      messages: [attachmentMessage],
+    );
+
+    await tester.pumpWidget(
+      _buildTestApp(
+        repository: _FakeMailboxRepository(thread: thread),
+        initialMessageId: attachmentMessage.id,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('smoke.txt'), findsOneWidget);
+    expect(find.text('text/plain - 2 B'), findsOneWidget);
   });
 
   testWidgets(
@@ -285,6 +329,17 @@ class _FakeMailboxRepository implements MailboxRepository {
   }) {
     throw UnimplementedError();
   }
+
+  @override
+  Future<DownloadedMailAttachment> downloadAttachment({
+    required String accountId,
+    required String messageId,
+    required MailMessageAttachment attachment,
+  }) async => const DownloadedMailAttachment(
+    filename: 'attachment.txt',
+    contentType: 'text/plain',
+    bytes: [104, 105],
+  );
 
   @override
   Future<MailThread> getMessageThread({

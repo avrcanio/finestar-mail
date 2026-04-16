@@ -1,13 +1,19 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
 import '../../../core/widgets/state_views.dart';
 import '../../compose/domain/entities/reply_context.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../domain/entities/mail_message_attachment.dart';
 import '../domain/entities/mail_thread.dart';
 import 'mailbox_controller.dart';
 
@@ -28,6 +34,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   final _expandedMessageIds = <String>{};
   final _visibleQuotedMessageIds = <String>{};
   final _markedReadMessageIds = <String>{};
+  final _downloadingAttachmentIds = <String>{};
   String? _initializedThreadMessageId;
   bool _isProcessingMessage = false;
 
@@ -76,6 +83,8 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                             message: message,
                             action: ReplyAction.forward,
                           ),
+                          downloadingAttachmentIds: _downloadingAttachmentIds,
+                          onDownloadAttachment: _downloadAttachment,
                         ),
                       ),
                     ],
@@ -304,6 +313,74 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
       ),
     );
   }
+
+  Future<void> _downloadAttachment(
+    MailThreadMessage message,
+    MailMessageAttachment attachment,
+  ) async {
+    final downloadKey = '${message.id}:${attachment.id}';
+    if (!_downloadingAttachmentIds.add(downloadKey)) {
+      return;
+    }
+    setState(() {});
+    try {
+      final account = await ref.read(activeAccountProvider.future);
+      if (account == null) {
+        _showSnackBar('Active account session is missing.');
+        return;
+      }
+      final downloaded = await ref
+          .read(mailboxRepositoryProvider)
+          .downloadAttachment(
+            accountId: account.id,
+            messageId: message.id,
+            attachment: attachment,
+          );
+      final file = await _saveAttachment(downloaded);
+      final openResult = await OpenFilex.open(
+        file.path,
+        type: downloaded.contentType,
+      );
+      if (openResult.type != ResultType.done) {
+        _showSnackBar(openResult.message);
+      }
+    } catch (error) {
+      _showSnackBar(error.toString());
+    } finally {
+      _downloadingAttachmentIds.remove(downloadKey);
+      if (mounted) {
+        setState(() {});
+      }
+    }
+  }
+
+  Future<File> _saveAttachment(DownloadedMailAttachment attachment) async {
+    final root = await getApplicationDocumentsDirectory();
+    final directory = await Directory(
+      p.join(root.path, 'attachments'),
+    ).create(recursive: true);
+    final file = File(
+      p.join(directory.path, _safeFilename(attachment.filename)),
+    );
+    return file.writeAsBytes(attachment.bytes, flush: true);
+  }
+
+  String _safeFilename(String value) {
+    final sanitized = value.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+    if (sanitized.isEmpty || sanitized == '.' || sanitized == '..') {
+      return 'attachment.bin';
+    }
+    return sanitized;
+  }
+
+  void _showSnackBar(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
 }
 
 enum _MessageTopBarMode { delete, restore, disabled }
@@ -382,6 +459,8 @@ class _MessageThreadContent extends StatelessWidget {
     required this.onToggleQuoted,
     required this.onReply,
     required this.onForward,
+    required this.downloadingAttachmentIds,
+    required this.onDownloadAttachment,
   });
 
   final MailThread thread;
@@ -391,6 +470,9 @@ class _MessageThreadContent extends StatelessWidget {
   final ValueChanged<String> onToggleQuoted;
   final ValueChanged<MailThreadMessage> onReply;
   final ValueChanged<MailThreadMessage> onForward;
+  final Set<String> downloadingAttachmentIds;
+  final void Function(MailThreadMessage, MailMessageAttachment)
+  onDownloadAttachment;
 
   @override
   Widget build(BuildContext context) {
@@ -410,6 +492,8 @@ class _MessageThreadContent extends StatelessWidget {
             onToggleQuoted: () => onToggleQuoted(message.id),
             onReply: () => onReply(message),
             onForward: () => onForward(message),
+            downloadingAttachmentIds: downloadingAttachmentIds,
+            onDownloadAttachment: onDownloadAttachment,
           ),
           const SizedBox(height: 8),
         ],
@@ -486,6 +570,8 @@ class _ThreadMessageCard extends StatelessWidget {
     required this.onToggleQuoted,
     required this.onReply,
     required this.onForward,
+    required this.downloadingAttachmentIds,
+    required this.onDownloadAttachment,
   });
 
   final MailThreadMessage message;
@@ -495,6 +581,9 @@ class _ThreadMessageCard extends StatelessWidget {
   final VoidCallback onToggleQuoted;
   final VoidCallback onReply;
   final VoidCallback onForward;
+  final Set<String> downloadingAttachmentIds;
+  final void Function(MailThreadMessage, MailMessageAttachment)
+  onDownloadAttachment;
 
   @override
   Widget build(BuildContext context) {
@@ -623,6 +712,14 @@ class _ThreadMessageCard extends StatelessWidget {
                   ),
                 ],
               ],
+              if (isExpanded && message.attachments.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                _AttachmentList(
+                  message: message,
+                  downloadingAttachmentIds: downloadingAttachmentIds,
+                  onDownloadAttachment: onDownloadAttachment,
+                ),
+              ],
             ],
           ),
         ),
@@ -644,6 +741,112 @@ class _ThreadMessageCard extends StatelessWidget {
         )
         .join(' ');
   }
+}
+
+class _AttachmentList extends StatelessWidget {
+  const _AttachmentList({
+    required this.message,
+    required this.downloadingAttachmentIds,
+    required this.onDownloadAttachment,
+  });
+
+  final MailThreadMessage message;
+  final Set<String> downloadingAttachmentIds;
+  final void Function(MailThreadMessage, MailMessageAttachment)
+  onDownloadAttachment;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final attachment in message.attachments)
+          _AttachmentChip(
+            attachment: attachment,
+            isDownloading: downloadingAttachmentIds.contains(
+              '${message.id}:${attachment.id}',
+            ),
+            onTap: () => onDownloadAttachment(message, attachment),
+          ),
+      ],
+    );
+  }
+}
+
+class _AttachmentChip extends StatelessWidget {
+  const _AttachmentChip({
+    required this.attachment,
+    required this.isDownloading,
+    required this.onTap,
+  });
+
+  final MailMessageAttachment attachment;
+  final bool isDownloading;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return ActionChip(
+      avatar: isDownloading
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2.2),
+            )
+          : Icon(Icons.attach_file, size: 18, color: primary),
+      label: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 220),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              attachment.filename,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: primary, fontWeight: FontWeight.w600),
+            ),
+            Text(
+              _attachmentSubtitle(attachment),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: _mutedText,
+                letterSpacing: 0,
+              ),
+            ),
+          ],
+        ),
+      ),
+      onPressed: isDownloading ? null : onTap,
+      backgroundColor: const Color(0xFFEAF3FF),
+      side: BorderSide.none,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+    );
+  }
+}
+
+String _attachmentSubtitle(MailMessageAttachment attachment) {
+  final size = attachment.sizeBytes == null
+      ? null
+      : _formatBytes(attachment.sizeBytes!);
+  final type = attachment.contentType.trim();
+  if (size == null) {
+    return type.isEmpty ? 'Attachment' : type;
+  }
+  return type.isEmpty ? size : '$type - $size';
+}
+
+String _formatBytes(int bytes) {
+  if (bytes >= 1024 * 1024) {
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+  if (bytes >= 1024) {
+    return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  }
+  return '$bytes B';
 }
 
 class _SenderAvatar extends StatelessWidget {

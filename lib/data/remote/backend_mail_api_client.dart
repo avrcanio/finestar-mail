@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 typedef BackendBaseUrlLoader = Future<String> Function();
 
@@ -85,7 +87,15 @@ class BackendMailApiClient {
   Future<BackendSendResponse> send({
     required String token,
     required BackendSendRequest request,
+    List<BackendSendAttachment> attachments = const [],
   }) async {
+    if (attachments.isNotEmpty) {
+      return _sendMultipart(
+        token: token,
+        request: request,
+        attachments: attachments,
+      );
+    }
     final json = await _requestJson(
       method: 'POST',
       path: '/api/mail/send',
@@ -93,6 +103,40 @@ class BackendMailApiClient {
       body: request.toJson(),
     );
     return BackendSendResponse.fromJson(json);
+  }
+
+  Future<BackendAttachmentDownload> downloadAttachment({
+    required String token,
+    required String folder,
+    required String uid,
+    required String attachmentId,
+  }) async {
+    final uri = await _uri(
+      '/api/mail/messages/${Uri.encodeComponent(uid)}/attachments/${Uri.encodeComponent(attachmentId)}',
+      {'folder': folder},
+    );
+    final response = await _httpClient
+        .get(
+          uri,
+          headers: {'Accept': '*/*', 'Authorization': 'Token ${token.trim()}'},
+        )
+        .timeout(timeout);
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final decoded = _tryDecodeObject(utf8.decode(response.bodyBytes));
+      throw BackendMailApiException(
+        statusCode: response.statusCode,
+        code: decoded['error'] as String?,
+        detail: decoded['detail'] as String?,
+      );
+    }
+
+    final contentDisposition = response.headers['content-disposition'];
+    return BackendAttachmentDownload(
+      bytes: response.bodyBytes,
+      filename: _filenameFromContentDisposition(contentDisposition),
+      contentType: response.headers['content-type'],
+    );
   }
 
   Future<BackendDeleteResponse> deleteMessages({
@@ -186,6 +230,55 @@ class BackendMailApiClient {
     return decoded;
   }
 
+  Future<BackendSendResponse> _sendMultipart({
+    required String token,
+    required BackendSendRequest request,
+    required List<BackendSendAttachment> attachments,
+  }) async {
+    final uri = await _uri('/api/mail/send', null);
+    final multipart = http.MultipartRequest('POST', uri)
+      ..headers['Accept'] = 'application/json'
+      ..headers['Authorization'] = 'Token ${token.trim()}'
+      ..fields.addAll(request.toMultipartScalarFields());
+
+    for (final recipient in request.to) {
+      multipart.files.add(http.MultipartFile.fromString('to', recipient));
+    }
+    for (final recipient in request.cc) {
+      multipart.files.add(http.MultipartFile.fromString('cc', recipient));
+    }
+    for (final recipient in request.bcc) {
+      multipart.files.add(http.MultipartFile.fromString('bcc', recipient));
+    }
+    final replyTo = request.replyTo;
+    if (replyTo != null && replyTo.trim().isNotEmpty) {
+      multipart.files.add(http.MultipartFile.fromString('reply_to', replyTo));
+    }
+
+    for (final attachment in attachments) {
+      multipart.files.add(
+        http.MultipartFile.fromBytes(
+          'attachments',
+          attachment.bytes,
+          filename: attachment.filename,
+          contentType: _mediaType(attachment.contentType),
+        ),
+      );
+    }
+
+    final streamed = await _httpClient.send(multipart).timeout(timeout);
+    final response = await http.Response.fromStream(streamed);
+    final decoded = _decodeObject(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw BackendMailApiException(
+        statusCode: response.statusCode,
+        code: decoded['error'] as String?,
+        detail: decoded['detail'] as String?,
+      );
+    }
+    return BackendSendResponse.fromJson(decoded);
+  }
+
   Future<http.Response> _send({
     required String method,
     required Uri uri,
@@ -230,6 +323,39 @@ class BackendMailApiClient {
     }
     throw const FormatException('Expected a JSON object response.');
   }
+
+  Map<String, dynamic> _tryDecodeObject(String body) {
+    try {
+      return _decodeObject(body);
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  String? _filenameFromContentDisposition(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return null;
+    }
+    final utf8Match = RegExp(
+      r"filename\*=UTF-8''([^;]+)",
+      caseSensitive: false,
+    ).firstMatch(value);
+    if (utf8Match != null) {
+      return Uri.decodeComponent(utf8Match.group(1)!);
+    }
+    final quotedMatch = RegExp(
+      r'filename="([^"]+)"',
+      caseSensitive: false,
+    ).firstMatch(value);
+    if (quotedMatch != null) {
+      return quotedMatch.group(1);
+    }
+    final plainMatch = RegExp(
+      r'filename=([^;]+)',
+      caseSensitive: false,
+    ).firstMatch(value);
+    return plainMatch?.group(1)?.trim();
+  }
 }
 
 class BackendMailApiException implements Exception {
@@ -265,6 +391,18 @@ class BackendMailApiException implements Exception {
     }
     if (currentCode == 'delete_from_trash_not_supported') {
       return 'Messages in Trash cannot be deleted from the app yet.';
+    }
+    if (currentCode == 'attachment_not_found') {
+      return 'Attachment could not be found.';
+    }
+    if (currentCode == 'attachment_too_large') {
+      return 'Attachment is too large to send.';
+    }
+    if (currentCode == 'attachments_too_large') {
+      return 'Attachments are too large to send together.';
+    }
+    if (currentCode == 'invalid_attachment_payload') {
+      return 'The attachment payload was invalid.';
     }
     if (currentCode == 'mail_timeout') {
       return 'The mail server timed out. Try again.';
@@ -432,6 +570,7 @@ class BackendMessageSummaryDto {
     required this.messageId,
     required this.flags,
     required this.size,
+    required this.hasAttachments,
   });
 
   final String uid;
@@ -444,6 +583,7 @@ class BackendMessageSummaryDto {
   final String messageId;
   final List<String> flags;
   final int? size;
+  final bool hasAttachments;
 
   factory BackendMessageSummaryDto.fromJson(Map<String, dynamic> json) {
     return BackendMessageSummaryDto(
@@ -457,6 +597,7 @@ class BackendMessageSummaryDto {
       messageId: json['message_id'] as String? ?? '',
       flags: _listOfStrings(json['flags']),
       size: json['size'] as int?,
+      hasAttachments: json['has_attachments'] as bool? ?? false,
     );
   }
 }
@@ -473,6 +614,7 @@ class BackendMessageDetailDto extends BackendMessageSummaryDto {
     required super.messageId,
     required super.flags,
     required super.size,
+    required super.hasAttachments,
     required this.textBody,
     required this.htmlBody,
     required this.attachments,
@@ -494,6 +636,7 @@ class BackendMessageDetailDto extends BackendMessageSummaryDto {
       messageId: json['message_id'] as String? ?? '',
       flags: _listOfStrings(json['flags']),
       size: json['size'] as int?,
+      hasAttachments: json['has_attachments'] as bool? ?? false,
       textBody: json['text_body'] as String? ?? '',
       htmlBody: json['html_body'] as String? ?? '',
       attachments: _listOfObjects(
@@ -505,25 +648,43 @@ class BackendMessageDetailDto extends BackendMessageSummaryDto {
 
 class BackendAttachmentDto {
   const BackendAttachmentDto({
+    required this.id,
     required this.filename,
     required this.contentType,
     required this.size,
     required this.disposition,
+    required this.isInline,
   });
 
+  final String id;
   final String? filename;
   final String contentType;
   final int? size;
   final String? disposition;
+  final bool isInline;
 
   factory BackendAttachmentDto.fromJson(Map<String, dynamic> json) {
     return BackendAttachmentDto(
+      id: json['id'] as String? ?? '',
       filename: json['filename'] as String?,
       contentType: json['content_type'] as String? ?? '',
       size: json['size'] as int?,
       disposition: json['disposition'] as String?,
+      isInline: json['is_inline'] as bool? ?? false,
     );
   }
+}
+
+class BackendAttachmentDownload {
+  const BackendAttachmentDownload({
+    required this.bytes,
+    required this.filename,
+    required this.contentType,
+  });
+
+  final Uint8List bytes;
+  final String? filename;
+  final String? contentType;
 }
 
 class BackendSendRequest {
@@ -557,6 +718,25 @@ class BackendSendRequest {
     'reply_to': replyTo,
     'from_display_name': fromDisplayName,
   };
+
+  Map<String, String> toMultipartScalarFields() => {
+    'subject': subject,
+    'text_body': textBody,
+    'html_body': htmlBody,
+    'from_display_name': fromDisplayName,
+  };
+}
+
+class BackendSendAttachment {
+  const BackendSendAttachment({
+    required this.filename,
+    required this.contentType,
+    required this.bytes,
+  });
+
+  final String filename;
+  final String contentType;
+  final List<int> bytes;
 }
 
 class BackendSendResponse {
@@ -686,4 +866,16 @@ DateTime? _dateTime(Object? value) {
     return null;
   }
   return DateTime.tryParse(value);
+}
+
+MediaType _mediaType(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) {
+    return MediaType('application', 'octet-stream');
+  }
+  try {
+    return MediaType.parse(trimmed);
+  } catch (_) {
+    return MediaType('application', 'octet-stream');
+  }
 }

@@ -1,3 +1,5 @@
+import 'mail_message_attachment.dart';
+
 class MailMessageDetail {
   const MailMessageDetail({
     required this.id,
@@ -7,6 +9,7 @@ class MailMessageDetail {
     required this.bodyPlain,
     required this.bodyHtml,
     required this.receivedAt,
+    this.attachments = const [],
   });
 
   final String id;
@@ -16,4 +19,5 @@ class MailMessageDetail {
   final String bodyPlain;
   final String? bodyHtml;
   final DateTime receivedAt;
+  final List<MailMessageAttachment> attachments;
 }

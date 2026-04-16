@@ -5,6 +5,7 @@ import '../../../data/remote/backend_mail_api_client.dart';
 import '../../../data/secure/secure_storage_service.dart';
 import '../domain/entities/mail_delete_result.dart';
 import '../domain/entities/mail_folder.dart' as domain;
+import '../domain/entities/mail_message_attachment.dart';
 import '../domain/entities/mail_message_detail.dart';
 import '../domain/entities/mail_message_page.dart';
 import '../domain/entities/mail_message_summary.dart';
@@ -342,7 +343,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         receivedAt: message.date ?? DateTime.now(),
         isRead: _hasFlag(message.flags, 'seen'),
         isImportant: _hasFlag(message.flags, 'flagged'),
-        hasAttachments: false,
+        hasAttachments: message.hasAttachments,
         sequence: int.tryParse(message.uid) ?? 0,
       );
     }).toList();
@@ -461,6 +462,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       bodyPlain: message.textBody,
       bodyHtml: message.htmlBody.isEmpty ? null : message.htmlBody,
       receivedAt: receivedAt,
+      attachments: _attachmentsFromBackend(message.attachments),
     );
 
     await _appDatabase.batch((batch) {
@@ -511,6 +513,40 @@ class MailboxRepositoryImpl implements MailboxRepository {
     });
 
     return detail;
+  }
+
+  @override
+  Future<DownloadedMailAttachment> downloadAttachment({
+    required String accountId,
+    required String messageId,
+    required MailMessageAttachment attachment,
+  }) async {
+    final token = await _authToken(accountId);
+    final uid = _uidFromMessageId(messageId);
+    if (token == null) {
+      throw StateError('Active account session is missing.');
+    }
+    if (uid == null || attachment.id.trim().isEmpty) {
+      throw StateError(
+        'Attachment download is only available for backend mail.',
+      );
+    }
+
+    final folder = await _folderPathForMessage(accountId, messageId);
+    final download = await _backendMailApiClient!.downloadAttachment(
+      token: token,
+      folder: folder,
+      uid: uid,
+      attachmentId: attachment.id,
+    );
+    return DownloadedMailAttachment(
+      filename: _downloadFilename(download.filename, attachment.filename),
+      contentType: _downloadContentType(
+        download.contentType,
+        attachment.contentType,
+      ),
+      bytes: download.bytes,
+    );
   }
 
   Future<db.MessageDetail> _cacheFallbackDetail(
@@ -588,6 +624,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
     required String accountId,
     required String messageId,
   }) async {
+    final selectedRemoteDetail = await _fetchBackendDetail(
+      accountId: accountId,
+      id: messageId,
+    );
     var selected =
         await (_appDatabase.select(_appDatabase.messageDetails)..where(
               (table) =>
@@ -615,6 +655,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final folders = await _cachedFolders(accountId);
     final folderNames = {
       for (final folder in folders) folder.id: _folderLabel(folder),
+    };
+    final attachmentByMessageId = <String, List<MailMessageAttachment>>{
+      if (selectedRemoteDetail != null)
+        selectedRemoteDetail.id: selectedRemoteDetail.attachments,
     };
 
     final selectedTokens = _threadHeaderTokens(selected);
@@ -646,7 +690,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
       subject: selected.subject,
       selectedMessageId: selected.id,
       messages: threadRows
-          .map((row) => _threadMessageFromRow(row, folderNames))
+          .map(
+            (row) => _threadMessageFromRow(
+              row,
+              folderNames,
+              attachmentByMessageId[row.id] ?? const [],
+            ),
+          )
           .toList(),
     );
   }
@@ -1355,6 +1405,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
   MailThreadMessage _threadMessageFromRow(
     db.MessageDetail row,
     Map<String, String> folderNames,
+    List<MailMessageAttachment> attachments,
   ) {
     final fallbackFolder = row.folderId.isEmpty ? 'Mail' : row.folderId;
     return MailThreadMessage(
@@ -1370,7 +1421,46 @@ class MailboxRepositoryImpl implements MailboxRepository {
       messageIdHeader: row.messageIdHeader,
       inReplyToHeader: row.inReplyToHeader,
       referencesHeader: row.referencesHeader,
+      attachments: attachments,
     );
+  }
+
+  List<MailMessageAttachment> _attachmentsFromBackend(
+    List<BackendAttachmentDto> attachments,
+  ) {
+    return attachments
+        .where((attachment) => attachment.id.trim().isNotEmpty)
+        .map(
+          (attachment) => MailMessageAttachment(
+            id: attachment.id,
+            filename: _attachmentFilename(attachment),
+            contentType: attachment.contentType.trim().isEmpty
+                ? 'application/octet-stream'
+                : attachment.contentType,
+            sizeBytes: attachment.size,
+            disposition: attachment.disposition,
+            isInline: attachment.isInline,
+          ),
+        )
+        .toList();
+  }
+
+  String _attachmentFilename(BackendAttachmentDto attachment) {
+    final filename = attachment.filename?.trim();
+    if (filename != null && filename.isNotEmpty) {
+      return filename;
+    }
+    return '${attachment.id}.bin';
+  }
+
+  String _downloadFilename(String? downloaded, String fallback) {
+    final value = downloaded?.trim();
+    return value == null || value.isEmpty ? fallback : value;
+  }
+
+  String _downloadContentType(String? downloaded, String fallback) {
+    final value = downloaded?.trim();
+    return value == null || value.isEmpty ? fallback : value;
   }
 
   Future<String?> _authToken(String accountId) async {

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
@@ -6,12 +7,14 @@ import 'package:finestar_mail/core/result/result.dart';
 import 'package:finestar_mail/data/local/app_database.dart' as db;
 import 'package:finestar_mail/data/remote/backend_mail_api_client.dart';
 import 'package:finestar_mail/data/secure/secure_storage_service.dart';
+import 'package:finestar_mail/features/attachments/domain/entities/attachment_ref.dart';
 import 'package:finestar_mail/features/auth/data/auth_repository_impl.dart';
 import 'package:finestar_mail/features/auth/domain/entities/connection_settings.dart';
 import 'package:finestar_mail/features/compose/data/compose_repository_impl.dart';
 import 'package:finestar_mail/features/compose/domain/entities/outgoing_message.dart';
 import 'package:finestar_mail/features/mailbox/data/mailbox_repository_impl.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_attachment.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -110,6 +113,7 @@ void main() {
                       'message_id': '<m1@example.test>',
                       'flags': ['Seen'],
                       'size': 123,
+                      'has_attachments': true,
                     },
                   ],
                 }),
@@ -131,9 +135,19 @@ void main() {
                   'message_id': '<m1@example.test>',
                   'flags': ['Seen'],
                   'size': 123,
+                  'has_attachments': true,
                   'text_body': 'Plain backend body',
                   'html_body': '<p>Plain backend body</p>',
-                  'attachments': [],
+                  'attachments': [
+                    {
+                      'id': 'att_1',
+                      'filename': 'smoke.txt',
+                      'content_type': 'text/plain',
+                      'size': 2,
+                      'disposition': 'attachment',
+                      'is_inline': false,
+                    },
+                  ],
                 },
               }),
               200,
@@ -153,6 +167,7 @@ void main() {
       );
       expect(summaries.single.id, 'app-test-1@finestar.hr:inbox:api:42');
       expect(summaries.single.isRead, isTrue);
+      expect(summaries.single.hasAttachments, isTrue);
 
       final page = await repository.getMessagePage(
         accountId: 'app-test-1@finestar.hr',
@@ -167,6 +182,105 @@ void main() {
         id: summaries.single.id,
       );
       expect(detail.bodyPlain, 'Plain backend body');
+      expect(detail.attachments.single.id, 'att_1');
+      expect(detail.attachments.single.filename, 'smoke.txt');
+    },
+  );
+
+  test(
+    'mailbox repository downloads backend attachment by folder and uid',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      final storage = _MemorySecureStorageService();
+      addTearDown(database.close);
+      await storage.saveAuthToken(
+        accountId: 'app-test-1@finestar.hr',
+        token: 'backend-token',
+      );
+      const folder = MailFolder(
+        id: 'app-test-1@finestar.hr:inbox',
+        name: 'INBOX',
+        path: 'INBOX',
+        isInbox: true,
+      );
+      await _insertFolder(database, folder);
+      await _insertCachedBackendMessage(database, uid: '42');
+
+      final repository = MailboxRepositoryImpl(
+        appDatabase: database,
+        secureStorageService: storage,
+        backendMailApiClient: BackendMailApiClient(
+          httpClient: MockClient((request) async {
+            expect(request.headers['Authorization'], 'Token backend-token');
+            expect(request.url.path, '/api/mail/messages/42/attachments/att_1');
+            expect(request.url.queryParameters['folder'], 'INBOX');
+            return http.Response.bytes(
+              [104, 105],
+              200,
+              headers: {
+                'content-type': 'text/plain',
+                'content-disposition': 'attachment; filename="server.txt"',
+              },
+            );
+          }),
+          baseUrlLoader: () async => 'https://mail.example.test',
+        ),
+      );
+
+      final downloaded = await repository.downloadAttachment(
+        accountId: 'app-test-1@finestar.hr',
+        messageId: 'app-test-1@finestar.hr:inbox:api:42',
+        attachment: const MailMessageAttachment(
+          id: 'att_1',
+          filename: 'local.txt',
+          contentType: 'text/plain',
+          sizeBytes: 2,
+          disposition: 'attachment',
+          isInline: false,
+        ),
+      );
+
+      expect(downloaded.filename, 'server.txt');
+      expect(downloaded.contentType, 'text/plain');
+      expect(downloaded.bytes, [104, 105]);
+    },
+  );
+
+  test(
+    'mailbox repository rejects local-only attachment download without http',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      final storage = _MemorySecureStorageService();
+      addTearDown(database.close);
+      var httpCalls = 0;
+      final repository = MailboxRepositoryImpl(
+        appDatabase: database,
+        secureStorageService: storage,
+        backendMailApiClient: BackendMailApiClient(
+          httpClient: MockClient((request) async {
+            httpCalls++;
+            return http.Response('{}', 500);
+          }),
+          baseUrlLoader: () async => 'https://mail.example.test',
+        ),
+      );
+
+      await expectLater(
+        repository.downloadAttachment(
+          accountId: 'app-test-1@finestar.hr',
+          messageId: 'app-test-1@finestar.hr:inbox:local:42',
+          attachment: const MailMessageAttachment(
+            id: 'att_1',
+            filename: 'local.txt',
+            contentType: 'text/plain',
+            sizeBytes: 2,
+            disposition: 'attachment',
+            isInline: false,
+          ),
+        ),
+        throwsStateError,
+      );
+      expect(httpCalls, 0);
     },
   );
 
@@ -766,6 +880,78 @@ void main() {
         details.single.recipients,
         'client@example.test,copy@example.test,hidden@example.test',
       );
+    },
+  );
+
+  test(
+    'compose repository sends attachments as multipart and caches sent flag',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      final storage = _MemorySecureStorageService();
+      final tempDir = await Directory.systemTemp.createTemp(
+        'fs-mail-attachment',
+      );
+      addTearDown(database.close);
+      addTearDown(() => tempDir.delete(recursive: true));
+      await _insertAccountAndToken(database, storage);
+      final attachmentFile = File(
+        '${tempDir.path}${Platform.pathSeparator}smoke.txt',
+      );
+      await attachmentFile.writeAsString('hello attachment');
+
+      final repository = ComposeRepositoryImpl(
+        appDatabase: database,
+        logger: Logger(printer: SimplePrinter(printTime: false)),
+        secureStorageService: storage,
+        backendMailApiClient: BackendMailApiClient(
+          httpClient: MockClient((request) async {
+            expect(request.url.path, '/api/mail/send');
+            expect(request.headers['Authorization'], 'Token backend-token');
+            expect(
+              request.headers['content-type'],
+              contains('multipart/form-data'),
+            );
+            expect(request.body, contains('client@example.test'));
+            expect(request.body, contains('filename="smoke.txt"'));
+            expect(request.body, contains('hello attachment'));
+            return http.Response(
+              jsonEncode({
+                'account_email': 'app-test-1@finestar.hr',
+                'status': 'sent',
+                'message_id': '<sent-with-attachment@example.test>',
+              }),
+              200,
+            );
+          }),
+          baseUrlLoader: () async => 'https://mail.example.test',
+        ),
+      );
+
+      final result = await repository.send(
+        OutgoingMessage(
+          accountId: 'app-test-1@finestar.hr',
+          to: const ['Client Name <client@example.test>'],
+          cc: const [],
+          bcc: const [],
+          subject: 'Attachment send',
+          body: 'Attached.',
+          attachments: [
+            AttachmentRef(
+              id: 'file-1',
+              fileName: 'smoke.txt',
+              filePath: attachmentFile.path,
+              sizeBytes: await attachmentFile.length(),
+              mimeType: 'text/plain',
+            ),
+          ],
+        ),
+      );
+
+      expect(result, isA<Success<void>>());
+      final summary = await database
+          .select(database.messageSummaries)
+          .getSingle();
+      expect(summary.hasAttachments, isTrue);
     },
   );
 

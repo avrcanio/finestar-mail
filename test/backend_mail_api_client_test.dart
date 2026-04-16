@@ -174,6 +174,7 @@ void main() {
                   'message_id': '<older@example.test>',
                   'flags': [],
                   'size': 123,
+                  'has_attachments': true,
                 },
               ],
               'has_more': true,
@@ -209,8 +210,160 @@ void main() {
       expect(firstPage.hasMore, isTrue);
       expect(firstPage.nextBeforeUid, '40');
       expect(olderPage.messages.single.uid, '41');
+      expect(olderPage.messages.single.hasAttachments, isTrue);
     },
   );
+
+  test('message detail parses attachment metadata', () async {
+    final client = BackendMailApiClient(
+      httpClient: MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'account_email': 'app-test-1@finestar.hr',
+            'folder': 'INBOX',
+            'message': {
+              'uid': '42',
+              'folder': 'INBOX',
+              'subject': 'Attachment',
+              'sender': 'sender@example.test',
+              'to': ['app-test-1@finestar.hr'],
+              'cc': [],
+              'date': '2026-04-16T07:00:00Z',
+              'message_id': '<m1@example.test>',
+              'flags': [],
+              'size': 123,
+              'has_attachments': true,
+              'text_body': 'See attachment.',
+              'html_body': '',
+              'attachments': [
+                {
+                  'id': 'att_1',
+                  'filename': 'invoice.pdf',
+                  'content_type': 'application/pdf',
+                  'size': 182340,
+                  'disposition': 'attachment',
+                  'is_inline': false,
+                },
+              ],
+            },
+          }),
+          200,
+        );
+      }),
+      baseUrlLoader: () async => 'https://mail.example.test',
+    );
+
+    final detail = await client.messageDetail(
+      token: 'session-token',
+      folder: 'INBOX',
+      uid: '42',
+    );
+
+    expect(detail.message.hasAttachments, isTrue);
+    expect(detail.message.attachments.single.id, 'att_1');
+    expect(detail.message.attachments.single.filename, 'invoice.pdf');
+    expect(detail.message.attachments.single.contentType, 'application/pdf');
+    expect(detail.message.attachments.single.size, 182340);
+    expect(detail.message.attachments.single.disposition, 'attachment');
+    expect(detail.message.attachments.single.isInline, isFalse);
+  });
+
+  test('attachment download sends auth and returns binary metadata', () async {
+    final client = BackendMailApiClient(
+      httpClient: MockClient((request) async {
+        expect(request.headers['Authorization'], 'Token session-token');
+        expect(request.url.path, '/api/mail/messages/42/attachments/att_1');
+        expect(request.url.queryParameters['folder'], 'INBOX');
+        return http.Response.bytes(
+          [104, 105],
+          200,
+          headers: {
+            'content-type': 'text/plain',
+            'content-disposition': 'attachment; filename="smoke.txt"',
+          },
+        );
+      }),
+      baseUrlLoader: () async => 'https://mail.example.test',
+    );
+
+    final download = await client.downloadAttachment(
+      token: 'session-token',
+      folder: 'INBOX',
+      uid: '42',
+      attachmentId: 'att_1',
+    );
+
+    expect(download.bytes, [104, 105]);
+    expect(download.filename, 'smoke.txt');
+    expect(download.contentType, 'text/plain');
+  });
+
+  test('multipart send posts attachment file parts', () async {
+    final client = BackendMailApiClient(
+      httpClient: MockClient((request) async {
+        expect(request.url.path, '/api/mail/send');
+        expect(request.headers['Authorization'], 'Token session-token');
+        expect(
+          request.headers['content-type'],
+          contains('multipart/form-data'),
+        );
+        expect(request.body, contains('name="to"'));
+        expect(request.body, contains('client@example.test'));
+        expect(request.body, contains('name="attachments"'));
+        expect(request.body, contains('filename="smoke.txt"'));
+        expect(request.body, contains('hello attachment'));
+        return http.Response(
+          jsonEncode({
+            'account_email': 'app-test-1@finestar.hr',
+            'status': 'sent',
+            'message_id': '<sent@example.test>',
+          }),
+          200,
+        );
+      }),
+      baseUrlLoader: () async => 'https://mail.example.test',
+    );
+
+    final response = await client.send(
+      token: 'session-token',
+      request: const BackendSendRequest(
+        to: ['client@example.test'],
+        cc: [],
+        bcc: [],
+        subject: 'Status',
+        textBody: 'Body',
+        htmlBody: '',
+        replyTo: null,
+        fromDisplayName: 'App Test',
+      ),
+      attachments: const [
+        BackendSendAttachment(
+          filename: 'smoke.txt',
+          contentType: 'text/plain',
+          bytes: [
+            104,
+            101,
+            108,
+            108,
+            111,
+            32,
+            97,
+            116,
+            116,
+            97,
+            99,
+            104,
+            109,
+            101,
+            110,
+            116,
+          ],
+        ),
+      ],
+    );
+
+    expect(response.messageId, '<sent@example.test>');
+  });
 
   test(
     'delete endpoints send Authorization and parse success responses',
@@ -479,4 +632,32 @@ void main() {
       );
     },
   );
+
+  test('attachment errors expose stable user-facing messages', () async {
+    final client = BackendMailApiClient(
+      httpClient: MockClient((request) async {
+        return http.Response(
+          jsonEncode({'error': 'attachment_not_found'}),
+          404,
+        );
+      }),
+      baseUrlLoader: () async => 'https://mail.example.test',
+    );
+
+    await expectLater(
+      client.downloadAttachment(
+        token: 'session-token',
+        folder: 'INBOX',
+        uid: '42',
+        attachmentId: 'missing',
+      ),
+      throwsA(
+        isA<BackendMailApiException>().having(
+          (error) => error.userMessage,
+          'message',
+          'Attachment could not be found.',
+        ),
+      ),
+    );
+  });
 }

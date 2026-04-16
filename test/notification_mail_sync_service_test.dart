@@ -2,6 +2,7 @@ import 'package:finestar_mail/features/auth/domain/entities/connection_settings.
 import 'package:finestar_mail/features/auth/domain/entities/mail_account.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_delete_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_attachment.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_summary.dart';
@@ -175,6 +176,17 @@ class _FakeMailboxRepository implements MailboxRepository {
   }) {
     throw UnimplementedError();
   }
+
+  @override
+  Future<DownloadedMailAttachment> downloadAttachment({
+    required String accountId,
+    required String messageId,
+    required MailMessageAttachment attachment,
+  }) async => const DownloadedMailAttachment(
+    filename: 'attachment.txt',
+    contentType: 'text/plain',
+    bytes: [104, 105],
+  );
 
   @override
   Future<MailThread> getMessageThread({

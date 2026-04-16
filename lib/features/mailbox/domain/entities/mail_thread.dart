@@ -1,3 +1,5 @@
+import 'mail_message_attachment.dart';
+
 class MailThread {
   const MailThread({
     required this.subject,
@@ -24,6 +26,7 @@ class MailThreadMessage {
     required this.messageIdHeader,
     required this.inReplyToHeader,
     required this.referencesHeader,
+    this.attachments = const [],
   });
 
   final String id;
@@ -38,6 +41,7 @@ class MailThreadMessage {
   final String? messageIdHeader;
   final String? inReplyToHeader;
   final String? referencesHeader;
+  final List<MailMessageAttachment> attachments;
 
   String get visibleBody => splitQuotedText(bodyPlain).visibleBody;
 

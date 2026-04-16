@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:drift/drift.dart';
 import 'package:logger/logger.dart';
 
@@ -5,6 +7,7 @@ import '../../../core/result/result.dart';
 import '../../../data/local/app_database.dart';
 import '../../../data/remote/backend_mail_api_client.dart';
 import '../../../data/secure/secure_storage_service.dart';
+import '../../attachments/domain/entities/attachment_ref.dart';
 import '../domain/entities/outgoing_message.dart';
 import '../domain/repositories/compose_repository.dart';
 
@@ -23,6 +26,8 @@ class ComposeRepositoryImpl implements ComposeRepository {
   final Logger _logger;
   final SecureStorageService _secureStorageService;
   final BackendMailApiClient _backendMailApiClient;
+  static const _maxAttachmentBytes = 10 * 1024 * 1024;
+  static const _maxTotalAttachmentBytes = 25 * 1024 * 1024;
 
   @override
   Future<Result<void>> send(OutgoingMessage message) async {
@@ -49,6 +54,13 @@ class ComposeRepositoryImpl implements ComposeRepository {
       return const Failure<void>('Active account session is missing.');
     }
 
+    final attachmentResult = await _backendAttachments(message.attachments);
+    if (attachmentResult is Failure<List<BackendSendAttachment>>) {
+      return Failure<void>(attachmentResult.message);
+    }
+    final attachments =
+        (attachmentResult as Success<List<BackendSendAttachment>>).value;
+
     try {
       final response = await _backendMailApiClient.send(
         token: token,
@@ -62,6 +74,7 @@ class ComposeRepositoryImpl implements ComposeRepository {
           replyTo: null,
           fromDisplayName: account.displayName,
         ),
+        attachments: attachments,
       );
       await _cacheSentMessage(
         account: account,
@@ -89,6 +102,40 @@ class ComposeRepositoryImpl implements ComposeRepository {
       );
       return Failure<void>('Unable to send message: $error');
     }
+  }
+
+  Future<Result<List<BackendSendAttachment>>> _backendAttachments(
+    List<AttachmentRef> attachments,
+  ) async {
+    var totalBytes = 0;
+    final backendAttachments = <BackendSendAttachment>[];
+    for (final attachment in attachments) {
+      if (attachment.sizeBytes > _maxAttachmentBytes) {
+        return const Failure<List<BackendSendAttachment>>(
+          'Each attachment must be 10 MB or smaller.',
+        );
+      }
+      totalBytes += attachment.sizeBytes;
+      if (totalBytes > _maxTotalAttachmentBytes) {
+        return const Failure<List<BackendSendAttachment>>(
+          'Attachments must be 25 MB or smaller in total.',
+        );
+      }
+      final file = File(attachment.filePath);
+      if (!await file.exists()) {
+        return Failure<List<BackendSendAttachment>>(
+          'Attachment file not found: ${attachment.fileName}',
+        );
+      }
+      backendAttachments.add(
+        BackendSendAttachment(
+          filename: attachment.fileName,
+          contentType: attachment.mimeType,
+          bytes: await file.readAsBytes(),
+        ),
+      );
+    }
+    return Success<List<BackendSendAttachment>>(backendAttachments);
   }
 
   Future<void> _cacheSentMessage({

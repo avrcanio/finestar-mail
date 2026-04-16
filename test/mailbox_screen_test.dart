@@ -5,6 +5,7 @@ import 'package:finestar_mail/features/auth/domain/entities/mail_account.dart';
 import 'package:finestar_mail/features/auth/presentation/auth_controller.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_delete_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_attachment.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_summary.dart';
@@ -54,6 +55,15 @@ void main() {
 
     expect(find.text('Sent sync smoke'), findsOneWidget);
     expect(find.text('Folder sync coming next.'), findsNothing);
+  });
+
+  testWidgets('mailbox list shows paperclip for attachment summary flag', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_buildTestApp());
+    await tester.pumpAndSettle();
+
+    expect(find.byIcon(Icons.attach_file), findsOneWidget);
   });
 
   testWidgets('avatar opens account management route', (tester) async {
@@ -264,7 +274,7 @@ class _FakeMailboxRepository implements MailboxRepository {
           isRead: false,
           isImportant: true,
           isPinned: true,
-          hasAttachments: false,
+          hasAttachments: true,
           sequence: 2,
         ),
         MailMessageSummary(
@@ -441,6 +451,17 @@ class _FakeMailboxRepository implements MailboxRepository {
   }) {
     throw UnimplementedError();
   }
+
+  @override
+  Future<DownloadedMailAttachment> downloadAttachment({
+    required String accountId,
+    required String messageId,
+    required MailMessageAttachment attachment,
+  }) async => const DownloadedMailAttachment(
+    filename: 'attachment.txt',
+    contentType: 'text/plain',
+    bytes: [104, 105],
+  );
 
   @override
   Future<MailThread> getMessageThread({

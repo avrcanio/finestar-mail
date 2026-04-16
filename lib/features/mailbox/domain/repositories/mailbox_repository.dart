@@ -1,6 +1,7 @@
 import '../entities/mail_folder.dart';
 import '../entities/mail_delete_result.dart';
 import '../entities/mail_message_detail.dart';
+import '../entities/mail_message_attachment.dart';
 import '../entities/mail_message_page.dart';
 import '../entities/mail_message_summary.dart';
 import '../entities/mail_restore_result.dart';
@@ -35,6 +36,12 @@ abstract class MailboxRepository {
   Future<MailMessageDetail> getMessageDetail({
     required String accountId,
     required String id,
+  });
+
+  Future<DownloadedMailAttachment> downloadAttachment({
+    required String accountId,
+    required String messageId,
+    required MailMessageAttachment attachment,
   });
 
   Future<MailThread> getMessageThread({
