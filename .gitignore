@@ -48,3 +48,9 @@ app.*.map.json
 # Local notification development config
 /assets/config/notification_dev.json
 .env
+
+# Local generated/reference assets
+ChatGPT Image 16. tra 2026. 16_09_12.png
+FS Mail.png
+finestar_mali.png
+google-services.json
