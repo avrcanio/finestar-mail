@@ -8,6 +8,7 @@ import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart'
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_summary.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_restore_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_thread.dart';
 import 'package:finestar_mail/features/mailbox/domain/repositories/mailbox_repository.dart';
 import 'package:finestar_mail/features/mailbox/presentation/mailbox_controller.dart';
@@ -171,6 +172,32 @@ void main() {
     ]);
     expect(find.text('Pinned important'), findsNothing);
   });
+
+  testWidgets('Trash selection restores selected messages to INBOX', (
+    tester,
+  ) async {
+    final repository = _FakeMailboxRepository(backendIds: true);
+    await tester.pumpWidget(_buildTestApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Open folders'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Trash'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Select message').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(find.byTooltip('Move selected to Trash'), findsNothing);
+    await tester.tap(find.byTooltip('Restore selected to INBOX'));
+    await tester.pumpAndSettle();
+
+    expect(repository.restoredMessageIds, [
+      'app-test-2@finestar.hr:trash:api:2',
+    ]);
+    expect(find.text('Trash message'), findsNothing);
+  });
 }
 
 Widget _buildTestApp({_FakeMailboxRepository? repository}) {
@@ -273,8 +300,22 @@ class _FakeMailboxRepository implements MailboxRepository {
       ];
 
   final List<MailMessageSummary> messages;
+  final trashMessages = <MailMessageSummary>[
+    MailMessageSummary(
+      id: 'app-test-2@finestar.hr:trash:api:2',
+      folderId: 'app-test-2@finestar.hr:trash',
+      subject: 'Trash message',
+      sender: 'client@finestar.hr',
+      preview: 'Restore me.',
+      receivedAt: DateTime(2026, 4, 16, 8),
+      isRead: true,
+      hasAttachments: false,
+      sequence: 2,
+    ),
+  ];
   final pageRequests = <String?>[];
   final deletedMessageIds = <String>[];
+  final restoredMessageIds = <String>[];
 
   @override
   Future<List<MailFolder>> getFolders(String accountId) async => const [
@@ -346,6 +387,9 @@ class _FakeMailboxRepository implements MailboxRepository {
           sequence: 1,
         ),
       ];
+    }
+    if (folder.path == 'Trash') {
+      return trashMessages;
     }
     return messages;
   }
@@ -425,6 +469,34 @@ class _FakeMailboxRepository implements MailboxRepository {
     return moveMessagesToTrash(
       accountId: accountId,
       folder: _inboxFolder,
+      messageIds: [messageId],
+    );
+  }
+
+  @override
+  Future<MailRestoreResult> restoreMessagesToInbox({
+    required String accountId,
+    required MailFolder folder,
+    required List<String> messageIds,
+  }) async {
+    restoredMessageIds.addAll(messageIds);
+    trashMessages.removeWhere((message) => messageIds.contains(message.id));
+    return MailRestoreResult(restoredMessageIds: messageIds, failed: const []);
+  }
+
+  @override
+  Future<MailRestoreResult> restoreMessageToInbox({
+    required String accountId,
+    required String messageId,
+  }) async {
+    return restoreMessagesToInbox(
+      accountId: accountId,
+      folder: const MailFolder(
+        id: 'app-test-2@finestar.hr:trash',
+        name: 'Trash',
+        path: 'Trash',
+        isInbox: false,
+      ),
       messageIds: [messageId],
     );
   }

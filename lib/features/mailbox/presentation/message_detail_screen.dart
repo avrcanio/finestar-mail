@@ -29,7 +29,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   final _visibleQuotedMessageIds = <String>{};
   final _markedReadMessageIds = <String>{};
   String? _initializedThreadMessageId;
-  bool _isDeleting = false;
+  bool _isProcessingMessage = false;
 
   @override
   Widget build(BuildContext context) {
@@ -48,10 +48,14 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                   return Column(
                     children: [
                       _MessageTopBar(
-                        isDeleting: _isDeleting,
-                        deleteEnabled: !_selectedMessageIsTrash(thread),
+                        isProcessing: _isProcessingMessage,
+                        mode: _selectedMessageIsTrash(thread)
+                            ? _MessageTopBarMode.restore
+                            : _MessageTopBarMode.delete,
                         onBack: _navigateBack,
-                        onDelete: () => _moveSelectedMessageToTrash(thread),
+                        onAction: () => _selectedMessageIsTrash(thread)
+                            ? _restoreSelectedMessageToInbox(thread)
+                            : _moveSelectedMessageToTrash(thread),
                       ),
                       Expanded(
                         child: _MessageThreadContent(
@@ -80,10 +84,10 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                 error: (error, stackTrace) => Column(
                   children: [
                     _MessageTopBar(
-                      isDeleting: false,
-                      deleteEnabled: false,
+                      isProcessing: false,
+                      mode: _MessageTopBarMode.disabled,
                       onBack: _navigateBack,
-                      onDelete: () {},
+                      onAction: () {},
                     ),
                     Expanded(child: ErrorStateView(message: error.toString())),
                   ],
@@ -91,10 +95,10 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                 loading: () => Column(
                   children: [
                     _MessageTopBar(
-                      isDeleting: false,
-                      deleteEnabled: false,
+                      isProcessing: false,
+                      mode: _MessageTopBarMode.disabled,
                       onBack: _navigateBack,
-                      onDelete: () {},
+                      onAction: () {},
                     ),
                     const Expanded(
                       child: Center(child: CircularProgressIndicator()),
@@ -118,7 +122,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   }
 
   Future<void> _moveSelectedMessageToTrash(MailThread thread) async {
-    if (_isDeleting || _selectedMessageIsTrash(thread)) {
+    if (_isProcessingMessage || _selectedMessageIsTrash(thread)) {
       return;
     }
     final account = await ref.read(activeAccountProvider.future);
@@ -126,7 +130,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
       return;
     }
 
-    setState(() => _isDeleting = true);
+    setState(() => _isProcessingMessage = true);
     try {
       final result = await ref
           .read(mailboxRepositoryProvider)
@@ -156,7 +160,51 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
       }
     } finally {
       if (mounted) {
-        setState(() => _isDeleting = false);
+        setState(() => _isProcessingMessage = false);
+      }
+    }
+  }
+
+  Future<void> _restoreSelectedMessageToInbox(MailThread thread) async {
+    if (_isProcessingMessage || !_selectedMessageIsTrash(thread)) {
+      return;
+    }
+    final account = await ref.read(activeAccountProvider.future);
+    if (account == null) {
+      return;
+    }
+
+    setState(() => _isProcessingMessage = true);
+    try {
+      final result = await ref
+          .read(mailboxRepositoryProvider)
+          .restoreMessageToInbox(
+            accountId: account.id,
+            messageId: thread.selectedMessageId,
+          );
+      if (!mounted) {
+        return;
+      }
+      if (result.restoredAny) {
+        ref.invalidate(mailboxMessagesControllerProvider);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Restored message to INBOX.')),
+        );
+        _navigateBack();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result.failed.isEmpty
+                  ? 'Restore to INBOX failed.'
+                  : result.failed.first.message,
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessingMessage = false);
       }
     }
   }
@@ -258,18 +306,20 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   }
 }
 
+enum _MessageTopBarMode { delete, restore, disabled }
+
 class _MessageTopBar extends StatelessWidget {
   const _MessageTopBar({
     required this.onBack,
-    required this.onDelete,
-    required this.deleteEnabled,
-    required this.isDeleting,
+    required this.onAction,
+    required this.mode,
+    required this.isProcessing,
   });
 
   final VoidCallback onBack;
-  final VoidCallback onDelete;
-  final bool deleteEnabled;
-  final bool isDeleting;
+  final VoidCallback onAction;
+  final _MessageTopBarMode mode;
+  final bool isProcessing;
 
   @override
   Widget build(BuildContext context) {
@@ -289,15 +339,23 @@ class _MessageTopBar extends StatelessWidget {
             icon: const Icon(Icons.archive_outlined),
           ),
           IconButton(
-            tooltip: 'Delete',
-            onPressed: deleteEnabled && !isDeleting ? onDelete : null,
-            icon: isDeleting
+            tooltip: mode == _MessageTopBarMode.restore
+                ? 'Restore to INBOX'
+                : 'Delete',
+            onPressed: mode != _MessageTopBarMode.disabled && !isProcessing
+                ? onAction
+                : null,
+            icon: isProcessing
                 ? const SizedBox(
                     width: 20,
                     height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2.4),
                   )
-                : const Icon(Icons.delete_outline),
+                : Icon(
+                    mode == _MessageTopBarMode.restore
+                        ? Icons.restore_from_trash_outlined
+                        : Icons.delete_outline,
+                  ),
           ),
           IconButton(
             tooltip: 'Mark unread',

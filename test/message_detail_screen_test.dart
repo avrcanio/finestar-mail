@@ -10,6 +10,7 @@ import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart'
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_summary.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_restore_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_thread.dart';
 import 'package:finestar_mail/features/mailbox/domain/repositories/mailbox_repository.dart';
 import 'package:finestar_mail/features/mailbox/presentation/message_detail_screen.dart';
@@ -114,13 +115,37 @@ void main() {
       expect(find.text('Inbox route reached'), findsOneWidget);
     },
   );
+
+  testWidgets(
+    'Trash detail restores selected message to INBOX and navigates back',
+    (tester) async {
+      final repository = _FakeMailboxRepository(thread: _trashThread);
+      await tester.pumpWidget(
+        _buildTestApp(
+          repository: repository,
+          initialMessageId: _trashThread.selectedMessageId,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Delete'), findsNothing);
+      await tester.tap(find.byTooltip('Restore to INBOX'));
+      await tester.pumpAndSettle();
+
+      expect(repository.restoredMessageIds, [_trashMessage.id]);
+      expect(find.text('Inbox route reached'), findsOneWidget);
+    },
+  );
 }
 
-Widget _buildTestApp({_FakeMailboxRepository? repository}) {
+Widget _buildTestApp({
+  _FakeMailboxRepository? repository,
+  String? initialMessageId,
+}) {
   final router = GoRouter(
     initialLocation: AppRoute.messageDetail.path.replaceFirst(
       ':id',
-      _thread.selectedMessageId,
+      initialMessageId ?? _thread.selectedMessageId,
     ),
     routes: [
       GoRoute(
@@ -212,9 +237,35 @@ final _thread = MailThread(
   messages: [_firstMessage, _secondMessage],
 );
 
+final _trashMessage = MailThreadMessage(
+  id: 'avrcan@finestar.hr:trash:api:42',
+  folderId: 'avrcan@finestar.hr:trash',
+  folderName: 'Trash',
+  subject: 'Trash restore smoke',
+  sender: 'ante@vitalgroupsa.com',
+  recipients: const ['avrcan@finestar.hr'],
+  bodyPlain: 'Restore this message.',
+  bodyHtml: null,
+  receivedAt: DateTime(2026, 4, 16, 9),
+  messageIdHeader: '<trash-message@finestar.hr>',
+  inReplyToHeader: null,
+  referencesHeader: null,
+);
+
+final _trashThread = MailThread(
+  subject: 'Trash restore smoke',
+  selectedMessageId: _trashMessage.id,
+  messages: [_trashMessage],
+);
+
 class _FakeMailboxRepository implements MailboxRepository {
+  _FakeMailboxRepository({MailThread? thread})
+    : _currentThread = thread ?? _thread;
+
+  final MailThread _currentThread;
   final markedReadMessageIds = <String>[];
   final deletedMessageIds = <String>[];
+  final restoredMessageIds = <String>[];
 
   @override
   Future<List<MailFolder>> getFolders(String accountId) async => const [];
@@ -239,7 +290,7 @@ class _FakeMailboxRepository implements MailboxRepository {
   Future<MailThread> getMessageThread({
     required String accountId,
     required String messageId,
-  }) async => _thread;
+  }) async => _currentThread;
 
   @override
   Future<List<MailMessageSummary>> getMessages({
@@ -267,6 +318,25 @@ class _FakeMailboxRepository implements MailboxRepository {
   }) async {
     deletedMessageIds.add(messageId);
     return MailDeleteResult(movedMessageIds: [messageId], failed: const []);
+  }
+
+  @override
+  Future<MailRestoreResult> restoreMessagesToInbox({
+    required String accountId,
+    required MailFolder folder,
+    required List<String> messageIds,
+  }) async {
+    restoredMessageIds.addAll(messageIds);
+    return MailRestoreResult(restoredMessageIds: messageIds, failed: const []);
+  }
+
+  @override
+  Future<MailRestoreResult> restoreMessageToInbox({
+    required String accountId,
+    required String messageId,
+  }) async {
+    restoredMessageIds.add(messageId);
+    return MailRestoreResult(restoredMessageIds: [messageId], failed: const []);
   }
 
   @override

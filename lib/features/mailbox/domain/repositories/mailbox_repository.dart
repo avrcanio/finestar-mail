@@ -3,6 +3,7 @@ import '../entities/mail_delete_result.dart';
 import '../entities/mail_message_detail.dart';
 import '../entities/mail_message_page.dart';
 import '../entities/mail_message_summary.dart';
+import '../entities/mail_restore_result.dart';
 import '../entities/mail_thread.dart';
 
 abstract class MailboxRepository {
@@ -48,6 +49,17 @@ abstract class MailboxRepository {
   });
 
   Future<MailDeleteResult> moveMessageToTrash({
+    required String accountId,
+    required String messageId,
+  });
+
+  Future<MailRestoreResult> restoreMessagesToInbox({
+    required String accountId,
+    required MailFolder folder,
+    required List<String> messageIds,
+  });
+
+  Future<MailRestoreResult> restoreMessageToInbox({
     required String accountId,
     required String messageId,
   });

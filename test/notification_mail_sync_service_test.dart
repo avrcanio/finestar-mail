@@ -5,6 +5,7 @@ import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart'
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_summary.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_restore_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_thread.dart';
 import 'package:finestar_mail/features/mailbox/domain/repositories/mailbox_repository.dart';
 import 'package:finestar_mail/features/notifications/data/mail_notification_payload.dart';
@@ -195,6 +196,19 @@ class _FakeMailboxRepository implements MailboxRepository {
     required String accountId,
     required String messageId,
   }) async => const MailDeleteResult(movedMessageIds: [], failed: []);
+
+  @override
+  Future<MailRestoreResult> restoreMessagesToInbox({
+    required String accountId,
+    required MailFolder folder,
+    required List<String> messageIds,
+  }) async => const MailRestoreResult(restoredMessageIds: [], failed: []);
+
+  @override
+  Future<MailRestoreResult> restoreMessageToInbox({
+    required String accountId,
+    required String messageId,
+  }) async => const MailRestoreResult(restoredMessageIds: [], failed: []);
 
   @override
   Future<List<MailMessageSummary>> searchMessages({

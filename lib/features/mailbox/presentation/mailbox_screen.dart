@@ -30,7 +30,7 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
   String? _selectedFolderId;
   String _searchQuery = '';
   final _selectedMessageIds = <String>{};
-  bool _isDeletingSelection = false;
+  bool _isProcessingSelection = false;
 
   @override
   void dispose() {
@@ -74,12 +74,12 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
 
   Future<void> _deleteSelectedMessages(MailFolder folder) async {
     if (_selectedMessageIds.isEmpty ||
-        _isDeletingSelection ||
+        _isProcessingSelection ||
         _isTrash(folder)) {
       return;
     }
 
-    setState(() => _isDeletingSelection = true);
+    setState(() => _isProcessingSelection = true);
     final requestedIds = _selectedMessageIds.toList();
     try {
       final result = await ref
@@ -123,7 +123,63 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
       }
     } finally {
       if (mounted) {
-        setState(() => _isDeletingSelection = false);
+        setState(() => _isProcessingSelection = false);
+      }
+    }
+  }
+
+  Future<void> _restoreSelectedMessages(MailFolder folder) async {
+    if (_selectedMessageIds.isEmpty ||
+        _isProcessingSelection ||
+        !_isTrash(folder)) {
+      return;
+    }
+
+    setState(() => _isProcessingSelection = true);
+    final requestedIds = _selectedMessageIds.toList();
+    try {
+      final result = await ref
+          .read(mailboxMessagesControllerProvider(folder).notifier)
+          .restoreSelectedToInbox(requestedIds);
+      if (!mounted) {
+        return;
+      }
+      final failedIds = result.failed
+          .map((failure) => failure.messageId)
+          .toSet();
+      setState(() {
+        _selectedMessageIds
+          ..clear()
+          ..addAll(failedIds);
+      });
+      final messenger = ScaffoldMessenger.of(context);
+      if (result.restoredAny && result.hasFailures) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Restored ${result.restoredMessageIds.length} to INBOX. '
+              '${result.failed.length} failed.',
+            ),
+          ),
+        );
+      } else if (result.restoredAny) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              result.restoredMessageIds.length == 1
+                  ? 'Restored message to INBOX.'
+                  : 'Restored ${result.restoredMessageIds.length} messages to INBOX.',
+            ),
+          ),
+        );
+      } else if (result.hasFailures) {
+        messenger.showSnackBar(
+          SnackBar(content: Text(result.failed.first.message)),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessingSelection = false);
       }
     }
   }
@@ -173,10 +229,14 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
                     )
                   : _SelectionActionBar(
                       count: _selectedMessageIds.length,
-                      isDeleting: _isDeletingSelection,
-                      deleteEnabled: !_isTrash(selectedFolder),
+                      isProcessing: _isProcessingSelection,
+                      mode: _isTrash(selectedFolder)
+                          ? _SelectionActionMode.restore
+                          : _SelectionActionMode.delete,
                       onClose: _clearSelection,
-                      onDelete: () => _deleteSelectedMessages(selectedFolder),
+                      onAction: () => _isTrash(selectedFolder)
+                          ? _restoreSelectedMessages(selectedFolder)
+                          : _deleteSelectedMessages(selectedFolder),
                     ),
             ),
             Expanded(
@@ -216,20 +276,22 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
   }
 }
 
+enum _SelectionActionMode { delete, restore }
+
 class _SelectionActionBar extends StatelessWidget {
   const _SelectionActionBar({
     required this.count,
-    required this.isDeleting,
-    required this.deleteEnabled,
+    required this.isProcessing,
+    required this.mode,
     required this.onClose,
-    required this.onDelete,
+    required this.onAction,
   });
 
   final int count;
-  final bool isDeleting;
-  final bool deleteEnabled;
+  final bool isProcessing;
+  final _SelectionActionMode mode;
   final VoidCallback onClose;
-  final VoidCallback onDelete;
+  final VoidCallback onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -245,7 +307,7 @@ class _SelectionActionBar extends StatelessWidget {
           children: [
             IconButton(
               tooltip: 'Clear selection',
-              onPressed: isDeleting ? null : onClose,
+              onPressed: isProcessing ? null : onClose,
               icon: const Icon(Icons.close),
             ),
             Expanded(
@@ -257,7 +319,7 @@ class _SelectionActionBar extends StatelessWidget {
                 ),
               ),
             ),
-            if (isDeleting)
+            if (isProcessing)
               const Padding(
                 padding: EdgeInsets.only(right: 18),
                 child: SizedBox(
@@ -268,11 +330,15 @@ class _SelectionActionBar extends StatelessWidget {
               )
             else
               IconButton(
-                tooltip: deleteEnabled
-                    ? 'Move selected to Trash'
-                    : 'Delete is disabled in Trash',
-                onPressed: deleteEnabled ? onDelete : null,
-                icon: const Icon(Icons.delete_outline),
+                tooltip: mode == _SelectionActionMode.restore
+                    ? 'Restore selected to INBOX'
+                    : 'Move selected to Trash',
+                onPressed: onAction,
+                icon: Icon(
+                  mode == _SelectionActionMode.restore
+                      ? Icons.restore_from_trash_outlined
+                      : Icons.delete_outline,
+                ),
               ),
             const SizedBox(width: 8),
           ],
@@ -582,7 +648,7 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
                     messages: visibleMessages,
                     folder: folder,
                     selectedMessageIds: widget.selectedMessageIds,
-                    selectionEnabled: !isSearching && !_isTrash(folder),
+                    selectionEnabled: !isSearching,
                     onToggleSelected: widget.onToggleSelected,
                   ),
                   if (!isSearching)
@@ -708,9 +774,7 @@ class _MessageList extends ConsumerWidget {
                 vertical: 10,
               ),
               leading: Tooltip(
-                message: selectionEnabled
-                    ? 'Select message'
-                    : 'Selection is disabled in Trash',
+                message: 'Select message',
                 child: InkWell(
                   customBorder: const CircleBorder(),
                   onTap: selectionEnabled

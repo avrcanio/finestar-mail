@@ -285,6 +285,86 @@ void main() {
     },
   );
 
+  test(
+    'restore endpoints send Authorization and parse success responses',
+    () async {
+      final requests = <http.Request>[];
+      final client = BackendMailApiClient(
+        httpClient: MockClient((request) async {
+          requests.add(request);
+          expect(request.headers['Authorization'], 'Token session-token');
+          if (request.url.path == '/api/mail/messages/restore') {
+            expect(jsonDecode(request.body), {
+              'folder': 'Trash',
+              'uids': ['42', '41'],
+              'target_folder': 'INBOX',
+            });
+            return http.Response(
+              jsonEncode({
+                'account_email': 'app-test-1@finestar.hr',
+                'folder': 'Trash',
+                'target_folder': 'INBOX',
+                'success': false,
+                'partial': true,
+                'restored': ['42'],
+                'failed': [
+                  {
+                    'uid': '41',
+                    'error': 'restore_failed',
+                    'detail': 'IMAP restore failed for UID 41',
+                  },
+                ],
+              }),
+              200,
+            );
+          }
+
+          expect(request.url.path, '/api/mail/messages/42/restore');
+          expect(request.url.queryParameters['folder'], 'Trash');
+          expect(request.url.queryParameters['target_folder'], 'INBOX');
+          return http.Response(
+            jsonEncode({
+              'account_email': 'app-test-1@finestar.hr',
+              'folder': 'Trash',
+              'target_folder': 'INBOX',
+              'success': true,
+              'partial': false,
+              'restored': ['42'],
+              'failed': [],
+            }),
+            200,
+          );
+        }),
+        baseUrlLoader: () async => 'https://mail.example.test',
+      );
+
+      final batch = await client.restoreMessages(
+        token: 'session-token',
+        folder: 'Trash',
+        uids: ['42', '41'],
+        targetFolder: 'INBOX',
+      );
+      final single = await client.restoreMessage(
+        token: 'session-token',
+        folder: 'Trash',
+        uid: '42',
+        targetFolder: 'INBOX',
+      );
+
+      expect(batch.partial, isTrue);
+      expect(batch.restored, ['42']);
+      expect(batch.failed.single.uid, '41');
+      expect(single.success, isTrue);
+      expect(
+        requests.map((request) => '${request.method} ${request.url.path}'),
+        [
+          'POST /api/mail/messages/restore',
+          'POST /api/mail/messages/42/restore',
+        ],
+      );
+    },
+  );
+
   test('backend errors expose stable user-facing messages', () async {
     final client = BackendMailApiClient(
       httpClient: MockClient((request) async {
@@ -368,4 +448,35 @@ void main() {
       ),
     );
   });
+
+  test(
+    'restore validation errors expose stable user-facing messages',
+    () async {
+      final client = BackendMailApiClient(
+        httpClient: MockClient((request) async {
+          return http.Response(
+            jsonEncode({'error': 'restore_target_is_trash'}),
+            400,
+          );
+        }),
+        baseUrlLoader: () async => 'https://mail.example.test',
+      );
+
+      await expectLater(
+        client.restoreMessages(
+          token: 'session-token',
+          folder: 'Trash',
+          uids: ['1'],
+          targetFolder: 'INBOX',
+        ),
+        throwsA(
+          isA<BackendMailApiException>().having(
+            (error) => error.userMessage,
+            'message',
+            'The restore request was invalid.',
+          ),
+        ),
+      );
+    },
+  );
 }

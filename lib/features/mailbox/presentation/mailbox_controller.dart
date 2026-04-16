@@ -7,6 +7,7 @@ import '../domain/entities/mail_folder.dart';
 import '../domain/entities/mail_message_detail.dart';
 import '../domain/entities/mail_message_page.dart';
 import '../domain/entities/mail_message_summary.dart';
+import '../domain/entities/mail_restore_result.dart';
 import '../domain/entities/mail_thread.dart';
 
 final foldersProvider = FutureProvider<List<MailFolder>>((ref) {
@@ -181,6 +182,49 @@ class MailboxMessagesController extends AsyncNotifier<MailboxMessagesState> {
         current.copyWith(
           messages: current.messages
               .where((message) => !movedIds.contains(message.id))
+              .toList(),
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<MailRestoreResult> restoreSelectedToInbox(
+    List<String> messageIds,
+  ) async {
+    final current = state.asData?.value;
+    if (current == null || messageIds.isEmpty) {
+      return const MailRestoreResult(restoredMessageIds: [], failed: []);
+    }
+
+    final account = await ref.read(activeAccountProvider.future);
+    if (account == null) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: messageIds
+            .map(
+              (id) => MailRestoreFailure(
+                messageId: id,
+                message: 'Active account session is missing.',
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    final result = await ref
+        .read(mailboxRepositoryProvider)
+        .restoreMessagesToInbox(
+          accountId: account.id,
+          folder: folder,
+          messageIds: messageIds,
+        );
+    if (result.restoredMessageIds.isNotEmpty) {
+      final restoredIds = result.restoredMessageIds.toSet();
+      state = AsyncData(
+        current.copyWith(
+          messages: current.messages
+              .where((message) => !restoredIds.contains(message.id))
               .toList(),
         ),
       );

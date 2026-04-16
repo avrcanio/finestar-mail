@@ -123,6 +123,36 @@ class BackendMailApiClient {
     return BackendDeleteResponse.fromJson(json);
   }
 
+  Future<BackendRestoreResponse> restoreMessages({
+    required String token,
+    required String folder,
+    required List<String> uids,
+    required String targetFolder,
+  }) async {
+    final json = await _requestJson(
+      method: 'POST',
+      path: '/api/mail/messages/restore',
+      token: token,
+      body: {'folder': folder, 'uids': uids, 'target_folder': targetFolder},
+    );
+    return BackendRestoreResponse.fromJson(json);
+  }
+
+  Future<BackendRestoreResponse> restoreMessage({
+    required String token,
+    required String folder,
+    required String uid,
+    required String targetFolder,
+  }) async {
+    final json = await _requestJson(
+      method: 'POST',
+      path: '/api/mail/messages/${Uri.encodeComponent(uid)}/restore',
+      queryParameters: {'folder': folder, 'target_folder': targetFolder},
+      token: token,
+    );
+    return BackendRestoreResponse.fromJson(json);
+  }
+
   Future<Map<String, dynamic>> _requestJson({
     required String method,
     required String path,
@@ -223,10 +253,15 @@ class BackendMailApiException implements Exception {
     if (currentCode == 'invalid_limit' || currentCode == 'invalid_before_uid') {
       return 'The mailbox request was invalid.';
     }
+    if (currentCode == 'restore_source_not_trash' ||
+        currentCode == 'invalid_target_folder' ||
+        currentCode == 'restore_target_is_trash') {
+      return 'The restore request was invalid.';
+    }
     if (currentCode == 'invalid_folder' ||
         currentCode == 'empty_uid_list' ||
         currentCode == 'invalid_uid') {
-      return 'The delete request was invalid.';
+      return 'The mailbox action request was invalid.';
     }
     if (currentCode == 'delete_from_trash_not_supported') {
       return 'Messages in Trash cannot be deleted from the app yet.';
@@ -594,6 +629,40 @@ class BackendDeleteFailureDto {
       uid: json['uid']?.toString() ?? '',
       error: json['error'] as String? ?? '',
       detail: json['detail'] as String? ?? '',
+    );
+  }
+}
+
+class BackendRestoreResponse {
+  const BackendRestoreResponse({
+    required this.accountEmail,
+    required this.folder,
+    required this.targetFolder,
+    required this.success,
+    required this.partial,
+    required this.restored,
+    required this.failed,
+  });
+
+  final String accountEmail;
+  final String folder;
+  final String targetFolder;
+  final bool success;
+  final bool partial;
+  final List<String> restored;
+  final List<BackendDeleteFailureDto> failed;
+
+  factory BackendRestoreResponse.fromJson(Map<String, dynamic> json) {
+    return BackendRestoreResponse(
+      accountEmail: json['account_email'] as String? ?? '',
+      folder: json['folder'] as String? ?? '',
+      targetFolder: json['target_folder'] as String? ?? '',
+      success: json['success'] as bool? ?? false,
+      partial: json['partial'] as bool? ?? false,
+      restored: _listOfStrings(json['restored']),
+      failed: _listOfObjects(
+        json['failed'],
+      ).map(BackendDeleteFailureDto.fromJson).toList(),
     );
   }
 }

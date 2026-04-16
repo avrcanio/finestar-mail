@@ -8,6 +8,7 @@ import '../domain/entities/mail_folder.dart' as domain;
 import '../domain/entities/mail_message_detail.dart';
 import '../domain/entities/mail_message_page.dart';
 import '../domain/entities/mail_message_summary.dart';
+import '../domain/entities/mail_restore_result.dart';
 import '../domain/entities/mail_thread.dart';
 import '../domain/repositories/mailbox_repository.dart';
 
@@ -23,6 +24,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
   final db.AppDatabase _appDatabase;
   final SecureStorageService? _secureStorageService;
   final BackendMailApiClient? _backendMailApiClient;
+
+  static const _restoreTargetFolder = 'INBOX';
 
   static List<domain.MailFolder> _fallbackFolders(String accountId) => [
     domain.MailFolder(
@@ -846,6 +849,216 @@ class MailboxRepositoryImpl implements MailboxRepository {
               message: failure.detail.trim().isEmpty
                   ? (failure.error.trim().isEmpty
                         ? 'Move to Trash failed.'
+                        : failure.error)
+                  : failure.detail,
+            ),
+          )
+          .toList(),
+    );
+  }
+
+  @override
+  Future<MailRestoreResult> restoreMessagesToInbox({
+    required String accountId,
+    required domain.MailFolder folder,
+    required List<String> messageIds,
+  }) async {
+    if (!_isTrashPath(folder.path)) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: messageIds
+            .map(
+              (id) => MailRestoreFailure(
+                messageId: id,
+                message: 'Only Trash messages can be restored.',
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    final token = await _authToken(accountId);
+    if (token == null) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: messageIds
+            .map(
+              (id) => MailRestoreFailure(
+                messageId: id,
+                message: 'Active account session is missing.',
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    final uidByMessageId = <String, String>{};
+    final localFailures = <MailRestoreFailure>[];
+    for (final messageId in messageIds.toSet()) {
+      final uid = _uidFromMessageId(messageId);
+      final folderSlug = _folderSlugFromMessageId(accountId, messageId);
+      if (uid == null || folderSlug == null || !_isTrashPath(folderSlug)) {
+        localFailures.add(
+          MailRestoreFailure(
+            messageId: messageId,
+            message: 'Only synced Trash messages can be restored.',
+          ),
+        );
+        continue;
+      }
+      uidByMessageId[messageId] = uid;
+    }
+
+    if (uidByMessageId.isEmpty) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: localFailures,
+      );
+    }
+
+    final BackendRestoreResponse response;
+    try {
+      response = await _backendMailApiClient!.restoreMessages(
+        token: token,
+        folder: folder.path,
+        uids: uidByMessageId.values.toList(),
+        targetFolder: _restoreTargetFolder,
+      );
+    } on BackendMailApiException catch (error) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: [
+          ...localFailures,
+          ...uidByMessageId.keys.map(
+            (id) =>
+                MailRestoreFailure(messageId: id, message: error.userMessage),
+          ),
+        ],
+      );
+    } catch (_) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: [
+          ...localFailures,
+          ...uidByMessageId.keys.map(
+            (id) => MailRestoreFailure(
+              messageId: id,
+              message: 'Restore to INBOX failed.',
+            ),
+          ),
+        ],
+      );
+    }
+
+    final restoredIds = response.restored
+        .map((uid) => _messageId(accountId, folder.path, uid))
+        .where(uidByMessageId.containsKey)
+        .toList();
+    await _removeCachedMessages(accountId: accountId, messageIds: restoredIds);
+
+    final backendFailures = response.failed.map((failure) {
+      final messageId = _messageId(accountId, folder.path, failure.uid);
+      return MailRestoreFailure(
+        messageId: messageId,
+        message: failure.detail.trim().isEmpty
+            ? (failure.error.trim().isEmpty
+                  ? 'Restore to INBOX failed.'
+                  : failure.error)
+            : failure.detail,
+      );
+    }).toList();
+
+    return MailRestoreResult(
+      restoredMessageIds: restoredIds,
+      failed: [...localFailures, ...backendFailures],
+    );
+  }
+
+  @override
+  Future<MailRestoreResult> restoreMessageToInbox({
+    required String accountId,
+    required String messageId,
+  }) async {
+    final uid = _uidFromMessageId(messageId);
+    if (uid == null) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: [
+          MailRestoreFailure(
+            messageId: messageId,
+            message: 'Only synced Trash messages can be restored.',
+          ),
+        ],
+      );
+    }
+
+    final folderPath = await _folderPathForMessage(accountId, messageId);
+    if (!_isTrashPath(folderPath)) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: [
+          MailRestoreFailure(
+            messageId: messageId,
+            message: 'Only Trash messages can be restored.',
+          ),
+        ],
+      );
+    }
+
+    final token = await _authToken(accountId);
+    if (token == null) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: [
+          MailRestoreFailure(
+            messageId: messageId,
+            message: 'Active account session is missing.',
+          ),
+        ],
+      );
+    }
+
+    final BackendRestoreResponse response;
+    try {
+      response = await _backendMailApiClient!.restoreMessage(
+        token: token,
+        folder: folderPath,
+        uid: uid,
+        targetFolder: _restoreTargetFolder,
+      );
+    } on BackendMailApiException catch (error) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: [
+          MailRestoreFailure(messageId: messageId, message: error.userMessage),
+        ],
+      );
+    } catch (_) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: [
+          MailRestoreFailure(
+            messageId: messageId,
+            message: 'Restore to INBOX failed.',
+          ),
+        ],
+      );
+    }
+
+    final restoredIds = response.restored
+        .map((restoredUid) => _messageId(accountId, folderPath, restoredUid))
+        .where((id) => id == messageId)
+        .toList();
+    await _removeCachedMessages(accountId: accountId, messageIds: restoredIds);
+    return MailRestoreResult(
+      restoredMessageIds: restoredIds,
+      failed: response.failed
+          .map(
+            (failure) => MailRestoreFailure(
+              messageId: _messageId(accountId, folderPath, failure.uid),
+              message: failure.detail.trim().isEmpty
+                  ? (failure.error.trim().isEmpty
+                        ? 'Restore to INBOX failed.'
                         : failure.error)
                   : failure.detail,
             ),
