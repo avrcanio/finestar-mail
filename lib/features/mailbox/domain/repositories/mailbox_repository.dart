@@ -1,4 +1,5 @@
 import '../entities/mail_folder.dart';
+import '../entities/mail_delete_result.dart';
 import '../entities/mail_message_detail.dart';
 import '../entities/mail_message_page.dart';
 import '../entities/mail_message_summary.dart';
@@ -36,6 +37,17 @@ abstract class MailboxRepository {
   });
 
   Future<MailThread> getMessageThread({
+    required String accountId,
+    required String messageId,
+  });
+
+  Future<MailDeleteResult> moveMessagesToTrash({
+    required String accountId,
+    required MailFolder folder,
+    required List<String> messageIds,
+  });
+
+  Future<MailDeleteResult> moveMessageToTrash({
     required String accountId,
     required String messageId,
   });

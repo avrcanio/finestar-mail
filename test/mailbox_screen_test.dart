@@ -3,6 +3,7 @@ import 'package:finestar_mail/app/router/app_route.dart';
 import 'package:finestar_mail/features/auth/domain/entities/connection_settings.dart';
 import 'package:finestar_mail/features/auth/domain/entities/mail_account.dart';
 import 'package:finestar_mail/features/auth/presentation/auth_controller.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_delete_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
@@ -152,6 +153,24 @@ void main() {
       hasLength(1),
     );
   });
+
+  testWidgets('avatar selection deletes selected messages', (tester) async {
+    final repository = _FakeMailboxRepository(backendIds: true);
+    await tester.pumpWidget(_buildTestApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Select message').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('1 selected'), findsOneWidget);
+    await tester.tap(find.byTooltip('Move selected to Trash'));
+    await tester.pumpAndSettle();
+
+    expect(repository.deletedMessageIds, [
+      'app-test-2@finestar.hr:inbox:api:2',
+    ]);
+    expect(find.text('Pinned important'), findsNothing);
+  });
 }
 
 Widget _buildTestApp({_FakeMailboxRepository? repository}) {
@@ -204,10 +223,12 @@ const _inboxFolder = MailFolder(
 );
 
 class _FakeMailboxRepository implements MailboxRepository {
-  _FakeMailboxRepository({int initialMessageCount = 2})
+  _FakeMailboxRepository({int initialMessageCount = 2, bool backendIds = false})
     : messages = [
         MailMessageSummary(
-          id: 'app-test-2@finestar.hr:inbox:imap:2',
+          id: backendIds
+              ? 'app-test-2@finestar.hr:inbox:api:2'
+              : 'app-test-2@finestar.hr:inbox:imap:2',
           folderId: 'app-test-2@finestar.hr:inbox',
           subject: 'Pinned important',
           sender: 'client@finestar.hr',
@@ -220,7 +241,9 @@ class _FakeMailboxRepository implements MailboxRepository {
           sequence: 2,
         ),
         MailMessageSummary(
-          id: 'app-test-2@finestar.hr:inbox:imap:3',
+          id: backendIds
+              ? 'app-test-2@finestar.hr:inbox:api:3'
+              : 'app-test-2@finestar.hr:inbox:imap:3',
           folderId: 'app-test-2@finestar.hr:inbox',
           subject: 'Read normal',
           sender: 'team@finestar.hr',
@@ -251,6 +274,7 @@ class _FakeMailboxRepository implements MailboxRepository {
 
   final List<MailMessageSummary> messages;
   final pageRequests = <String?>[];
+  final deletedMessageIds = <String>[];
 
   @override
   Future<List<MailFolder>> getFolders(String accountId) async => const [
@@ -380,6 +404,29 @@ class _FakeMailboxRepository implements MailboxRepository {
     required String messageId,
   }) {
     throw UnimplementedError();
+  }
+
+  @override
+  Future<MailDeleteResult> moveMessagesToTrash({
+    required String accountId,
+    required MailFolder folder,
+    required List<String> messageIds,
+  }) async {
+    deletedMessageIds.addAll(messageIds);
+    messages.removeWhere((message) => messageIds.contains(message.id));
+    return MailDeleteResult(movedMessageIds: messageIds, failed: const []);
+  }
+
+  @override
+  Future<MailDeleteResult> moveMessageToTrash({
+    required String accountId,
+    required String messageId,
+  }) async {
+    return moveMessagesToTrash(
+      accountId: accountId,
+      folder: _inboxFolder,
+      messageIds: [messageId],
+    );
   }
 
   @override

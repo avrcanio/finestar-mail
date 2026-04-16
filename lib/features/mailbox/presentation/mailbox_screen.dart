@@ -29,6 +29,8 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
   Timer? _searchDebounce;
   String? _selectedFolderId;
   String _searchQuery = '';
+  final _selectedMessageIds = <String>{};
+  bool _isDeletingSelection = false;
 
   @override
   void dispose() {
@@ -41,7 +43,10 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 400), () {
       if (mounted) {
-        setState(() => _searchQuery = value.trim());
+        setState(() {
+          _searchQuery = value.trim();
+          _selectedMessageIds.clear();
+        });
       }
     });
   }
@@ -49,7 +54,78 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
   void _clearSearch() {
     _searchDebounce?.cancel();
     _searchController.clear();
-    setState(() => _searchQuery = '');
+    setState(() {
+      _searchQuery = '';
+      _selectedMessageIds.clear();
+    });
+  }
+
+  void _toggleSelectedMessage(String messageId) {
+    setState(() {
+      if (!_selectedMessageIds.add(messageId)) {
+        _selectedMessageIds.remove(messageId);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    setState(_selectedMessageIds.clear);
+  }
+
+  Future<void> _deleteSelectedMessages(MailFolder folder) async {
+    if (_selectedMessageIds.isEmpty ||
+        _isDeletingSelection ||
+        _isTrash(folder)) {
+      return;
+    }
+
+    setState(() => _isDeletingSelection = true);
+    final requestedIds = _selectedMessageIds.toList();
+    try {
+      final result = await ref
+          .read(mailboxMessagesControllerProvider(folder).notifier)
+          .moveSelectedToTrash(requestedIds);
+      if (!mounted) {
+        return;
+      }
+      final failedIds = result.failed
+          .map((failure) => failure.messageId)
+          .toSet();
+      setState(() {
+        _selectedMessageIds
+          ..clear()
+          ..addAll(failedIds);
+      });
+      final messenger = ScaffoldMessenger.of(context);
+      if (result.movedAny && result.hasFailures) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Moved ${result.movedMessageIds.length} to Trash. '
+              '${result.failed.length} failed.',
+            ),
+          ),
+        );
+      } else if (result.movedAny) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              result.movedMessageIds.length == 1
+                  ? 'Moved message to Trash.'
+                  : 'Moved ${result.movedMessageIds.length} messages to Trash.',
+            ),
+          ),
+        );
+      } else if (result.hasFailures) {
+        messenger.showSnackBar(
+          SnackBar(content: Text(result.failed.first.message)),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isDeletingSelection = false);
+      }
+    }
   }
 
   @override
@@ -66,7 +142,10 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
         selectedFolderId: selectedFolder?.id,
         onFolderSelected: (folder) {
           _searchDebounce?.cancel();
-          setState(() => _selectedFolderId = folder.id);
+          setState(() {
+            _selectedFolderId = folder.id;
+            _selectedMessageIds.clear();
+          });
           Navigator.of(context).pop();
         },
       ),
@@ -80,15 +159,25 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
-              child: _GmailSearchBar(
-                controller: _searchController,
-                activeAccount: activeAccount,
-                isSearching: isSearching,
-                onMenuPressed: () => _scaffoldKey.currentState?.openDrawer(),
-                onChanged: _onSearchChanged,
-                onClear: _clearSearch,
-                onAvatarPressed: () => context.push(AppRoute.settings.path),
-              ),
+              child: _selectedMessageIds.isEmpty || selectedFolder == null
+                  ? _GmailSearchBar(
+                      controller: _searchController,
+                      activeAccount: activeAccount,
+                      isSearching: isSearching,
+                      onMenuPressed: () =>
+                          _scaffoldKey.currentState?.openDrawer(),
+                      onChanged: _onSearchChanged,
+                      onClear: _clearSearch,
+                      onAvatarPressed: () =>
+                          context.push(AppRoute.settings.path),
+                    )
+                  : _SelectionActionBar(
+                      count: _selectedMessageIds.length,
+                      isDeleting: _isDeletingSelection,
+                      deleteEnabled: !_isTrash(selectedFolder),
+                      onClose: _clearSelection,
+                      onDelete: () => _deleteSelectedMessages(selectedFolder),
+                    ),
             ),
             Expanded(
               child: selectedFolder == null
@@ -96,6 +185,8 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
                   : _MailboxContent(
                       folder: selectedFolder,
                       searchQuery: _searchQuery,
+                      selectedMessageIds: _selectedMessageIds,
+                      onToggleSelected: _toggleSelectedMessage,
                     ),
             ),
           ],
@@ -122,6 +213,72 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
       }
     }
     return folders.first;
+  }
+}
+
+class _SelectionActionBar extends StatelessWidget {
+  const _SelectionActionBar({
+    required this.count,
+    required this.isDeleting,
+    required this.deleteEnabled,
+    required this.onClose,
+    required this.onDelete,
+  });
+
+  final int count;
+  final bool isDeleting;
+  final bool deleteEnabled;
+  final VoidCallback onClose;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return Material(
+      elevation: 2,
+      shadowColor: Colors.black.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(28),
+      color: Colors.white,
+      child: SizedBox(
+        height: 56,
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Clear selection',
+              onPressed: isDeleting ? null : onClose,
+              icon: const Icon(Icons.close),
+            ),
+            Expanded(
+              child: Text(
+                '$count selected',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            if (isDeleting)
+              const Padding(
+                padding: EdgeInsets.only(right: 18),
+                child: SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2.5),
+                ),
+              )
+            else
+              IconButton(
+                tooltip: deleteEnabled
+                    ? 'Move selected to Trash'
+                    : 'Delete is disabled in Trash',
+                onPressed: deleteEnabled ? onDelete : null,
+                icon: const Icon(Icons.delete_outline),
+              ),
+            const SizedBox(width: 8),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -326,10 +483,17 @@ extension on NavigationDrawerDestination {
 }
 
 class _MailboxContent extends ConsumerStatefulWidget {
-  const _MailboxContent({required this.folder, required this.searchQuery});
+  const _MailboxContent({
+    required this.folder,
+    required this.searchQuery,
+    required this.selectedMessageIds,
+    required this.onToggleSelected,
+  });
 
   final MailFolder folder;
   final String searchQuery;
+  final Set<String> selectedMessageIds;
+  final ValueChanged<String> onToggleSelected;
 
   @override
   ConsumerState<_MailboxContent> createState() => _MailboxContentState();
@@ -414,7 +578,13 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
 
               return Column(
                 children: [
-                  _MessageList(messages: visibleMessages, folder: folder),
+                  _MessageList(
+                    messages: visibleMessages,
+                    folder: folder,
+                    selectedMessageIds: widget.selectedMessageIds,
+                    selectionEnabled: !isSearching && !_isTrash(folder),
+                    onToggleSelected: widget.onToggleSelected,
+                  ),
                   if (!isSearching)
                     _LoadMoreFooter(
                       state: messages as MailboxMessagesState,
@@ -488,103 +658,136 @@ class _LoadMoreFooter extends StatelessWidget {
 }
 
 class _MessageList extends ConsumerWidget {
-  const _MessageList({required this.messages, required this.folder});
+  const _MessageList({
+    required this.messages,
+    required this.folder,
+    required this.selectedMessageIds,
+    required this.selectionEnabled,
+    required this.onToggleSelected,
+  });
 
   final List<MailMessageSummary> messages;
   final MailFolder folder;
+  final Set<String> selectedMessageIds;
+  final bool selectionEnabled;
+  final ValueChanged<String> onToggleSelected;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final formatter = DateFormat('MMM d');
 
     return Column(
-      children: messages
-          .map(
-            (message) => Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: SectionCard(
-                color: message.isRead ? Colors.white : const Color(0xFFEAF4FF),
-                padding: const EdgeInsets.all(0),
-                child: ListTile(
-                  onLongPress: () => _showMessageActions(
-                    context: context,
-                    ref: ref,
-                    message: message,
-                  ),
-                  onTap: () => context.push(
-                    AppRoute.messageDetail.path.replaceFirst(':id', message.id),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 10,
-                  ),
-                  leading: CircleAvatar(
-                    backgroundColor: const Color(0xFFE8EFF8),
-                    child: Text(
-                      message.sender.characters.first.toUpperCase(),
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.w700,
+      children: messages.map((message) {
+        final selected = selectedMessageIds.contains(message.id);
+        final selectionActive = selectedMessageIds.isNotEmpty;
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: SectionCard(
+            color: selected
+                ? const Color(0xFFD7EAFE)
+                : message.isRead
+                ? Colors.white
+                : const Color(0xFFEAF4FF),
+            padding: const EdgeInsets.all(0),
+            child: ListTile(
+              onLongPress: () => _showMessageActions(
+                context: context,
+                ref: ref,
+                message: message,
+              ),
+              onTap: selectionActive && selectionEnabled
+                  ? () => onToggleSelected(message.id)
+                  : () => context.push(
+                      AppRoute.messageDetail.path.replaceFirst(
+                        ':id',
+                        message.id,
                       ),
                     ),
-                  ),
-                  title: Text(
-                    message.subject,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: message.isRead
-                          ? FontWeight.w500
-                          : FontWeight.w800,
-                    ),
-                  ),
-                  subtitle: Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      '${message.sender}\n${message.preview}',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  trailing: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(formatter.format(message.receivedAt)),
-                      const SizedBox(height: 6),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (message.isImportant)
-                            const Icon(
-                              Icons.error,
-                              size: 16,
-                              color: Color(0xFFD93025),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 10,
+              ),
+              leading: Tooltip(
+                message: selectionEnabled
+                    ? 'Select message'
+                    : 'Selection is disabled in Trash',
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: selectionEnabled
+                      ? () => onToggleSelected(message.id)
+                      : null,
+                  child: CircleAvatar(
+                    backgroundColor: selected
+                        ? Theme.of(context).colorScheme.primary
+                        : const Color(0xFFE8EFF8),
+                    child: selected
+                        ? const Icon(Icons.check, color: Colors.white, size: 20)
+                        : Text(
+                            message.sender.characters.first.toUpperCase(),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.primary,
+                              fontWeight: FontWeight.w700,
                             ),
-                          if (message.isPinned)
-                            const Padding(
-                              padding: EdgeInsets.only(left: 4),
-                              child: Icon(
-                                Icons.push_pin,
-                                size: 16,
-                                color: Color(0xFF153B52),
-                              ),
-                            ),
-                          if (message.hasAttachments)
-                            const Padding(
-                              padding: EdgeInsets.only(left: 4),
-                              child: Icon(Icons.attach_file, size: 16),
-                            ),
-                        ],
-                      ),
-                    ],
+                          ),
                   ),
-                  isThreeLine: true,
                 ),
               ),
+              title: Text(
+                message.subject,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: message.isRead
+                      ? FontWeight.w500
+                      : FontWeight.w800,
+                ),
+              ),
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '${message.sender}\n${message.preview}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              trailing: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(formatter.format(message.receivedAt)),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (message.isImportant)
+                        const Icon(
+                          Icons.error,
+                          size: 16,
+                          color: Color(0xFFD93025),
+                        ),
+                      if (message.isPinned)
+                        const Padding(
+                          padding: EdgeInsets.only(left: 4),
+                          child: Icon(
+                            Icons.push_pin,
+                            size: 16,
+                            color: Color(0xFF153B52),
+                          ),
+                        ),
+                      if (message.hasAttachments)
+                        const Padding(
+                          padding: EdgeInsets.only(left: 4),
+                          child: Icon(Icons.attach_file, size: 16),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+              isThreeLine: true,
             ),
-          )
-          .toList(),
+          ),
+        );
+      }).toList(),
     );
   }
 
@@ -706,6 +909,8 @@ IconData _folderIcon(MailFolder folder) {
 }
 
 bool _isInbox(MailFolder folder) => _folderRole(folder) == _FolderRole.inbox;
+
+bool _isTrash(MailFolder folder) => _folderRole(folder) == _FolderRole.trash;
 
 _FolderRole _folderRole(MailFolder folder) {
   final normalizedPath = folder.path.trim().toLowerCase();

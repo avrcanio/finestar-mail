@@ -5,6 +5,7 @@ import 'package:finestar_mail/features/auth/domain/entities/connection_settings.
 import 'package:finestar_mail/features/auth/domain/entities/mail_account.dart';
 import 'package:finestar_mail/features/auth/presentation/auth_controller.dart';
 import 'package:finestar_mail/features/compose/domain/entities/reply_context.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_delete_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
@@ -98,6 +99,21 @@ void main() {
 
     expect(repository.markedReadMessageIds, contains(_secondMessage.id));
   });
+
+  testWidgets(
+    'delete moves selected detail message to trash and navigates back',
+    (tester) async {
+      final repository = _FakeMailboxRepository();
+      await tester.pumpWidget(_buildTestApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Delete'));
+      await tester.pumpAndSettle();
+
+      expect(repository.deletedMessageIds, [_secondMessage.id]);
+      expect(find.text('Inbox route reached'), findsOneWidget);
+    },
+  );
 }
 
 Widget _buildTestApp({_FakeMailboxRepository? repository}) {
@@ -198,6 +214,7 @@ final _thread = MailThread(
 
 class _FakeMailboxRepository implements MailboxRepository {
   final markedReadMessageIds = <String>[];
+  final deletedMessageIds = <String>[];
 
   @override
   Future<List<MailFolder>> getFolders(String accountId) async => const [];
@@ -232,6 +249,25 @@ class _FakeMailboxRepository implements MailboxRepository {
     int pageSize = 20,
     bool forceRefresh = false,
   }) async => const [];
+
+  @override
+  Future<MailDeleteResult> moveMessagesToTrash({
+    required String accountId,
+    required MailFolder folder,
+    required List<String> messageIds,
+  }) async {
+    deletedMessageIds.addAll(messageIds);
+    return MailDeleteResult(movedMessageIds: messageIds, failed: const []);
+  }
+
+  @override
+  Future<MailDeleteResult> moveMessageToTrash({
+    required String accountId,
+    required String messageId,
+  }) async {
+    deletedMessageIds.add(messageId);
+    return MailDeleteResult(movedMessageIds: [messageId], failed: const []);
+  }
 
   @override
   Future<MailMessagePage> getMessagePage({

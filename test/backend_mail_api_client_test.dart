@@ -212,6 +212,79 @@ void main() {
     },
   );
 
+  test(
+    'delete endpoints send Authorization and parse success responses',
+    () async {
+      final requests = <http.Request>[];
+      final client = BackendMailApiClient(
+        httpClient: MockClient((request) async {
+          requests.add(request);
+          expect(request.headers['Authorization'], 'Token session-token');
+          if (request.url.path == '/api/mail/messages/delete') {
+            expect(jsonDecode(request.body), {
+              'folder': 'INBOX',
+              'uids': ['42', '41'],
+            });
+            return http.Response(
+              jsonEncode({
+                'account_email': 'app-test-1@finestar.hr',
+                'folder': 'INBOX',
+                'trash_folder': 'Trash',
+                'success': false,
+                'partial': true,
+                'moved_to_trash': ['42'],
+                'failed': [
+                  {
+                    'uid': '41',
+                    'error': 'move_failed',
+                    'detail': 'IMAP move failed for UID 41',
+                  },
+                ],
+              }),
+              200,
+            );
+          }
+
+          expect(request.url.path, '/api/mail/messages/42/delete');
+          expect(request.url.queryParameters['folder'], 'INBOX');
+          return http.Response(
+            jsonEncode({
+              'account_email': 'app-test-1@finestar.hr',
+              'folder': 'INBOX',
+              'trash_folder': 'Trash',
+              'success': true,
+              'partial': false,
+              'moved_to_trash': ['42'],
+              'failed': [],
+            }),
+            200,
+          );
+        }),
+        baseUrlLoader: () async => 'https://mail.example.test',
+      );
+
+      final batch = await client.deleteMessages(
+        token: 'session-token',
+        folder: 'INBOX',
+        uids: ['42', '41'],
+      );
+      final single = await client.deleteMessage(
+        token: 'session-token',
+        folder: 'INBOX',
+        uid: '42',
+      );
+
+      expect(batch.partial, isTrue);
+      expect(batch.movedToTrash, ['42']);
+      expect(batch.failed.single.uid, '41');
+      expect(single.success, isTrue);
+      expect(
+        requests.map((request) => '${request.method} ${request.url.path}'),
+        ['POST /api/mail/messages/delete', 'POST /api/mail/messages/42/delete'],
+      );
+    },
+  );
+
   test('backend errors expose stable user-facing messages', () async {
     final client = BackendMailApiClient(
       httpClient: MockClient((request) async {
@@ -268,4 +341,31 @@ void main() {
       );
     },
   );
+
+  test('delete validation errors expose stable user-facing messages', () async {
+    final client = BackendMailApiClient(
+      httpClient: MockClient((request) async {
+        return http.Response(
+          jsonEncode({'error': 'delete_from_trash_not_supported'}),
+          400,
+        );
+      }),
+      baseUrlLoader: () async => 'https://mail.example.test',
+    );
+
+    await expectLater(
+      client.deleteMessages(
+        token: 'session-token',
+        folder: 'Trash',
+        uids: ['1'],
+      ),
+      throwsA(
+        isA<BackendMailApiException>().having(
+          (error) => error.userMessage,
+          'message',
+          'Messages in Trash cannot be deleted from the app yet.',
+        ),
+      ),
+    );
+  });
 }

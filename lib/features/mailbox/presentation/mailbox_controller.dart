@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../domain/entities/mail_delete_result.dart';
 import '../domain/entities/mail_folder.dart';
 import '../domain/entities/mail_message_detail.dart';
 import '../domain/entities/mail_message_page.dart';
@@ -144,6 +145,47 @@ class MailboxMessagesController extends AsyncNotifier<MailboxMessagesState> {
         current.copyWith(isLoadingMore: false, loadMoreError: error.toString()),
       );
     }
+  }
+
+  Future<MailDeleteResult> moveSelectedToTrash(List<String> messageIds) async {
+    final current = state.asData?.value;
+    if (current == null || messageIds.isEmpty) {
+      return const MailDeleteResult(movedMessageIds: [], failed: []);
+    }
+
+    final account = await ref.read(activeAccountProvider.future);
+    if (account == null) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: messageIds
+            .map(
+              (id) => MailDeleteFailure(
+                messageId: id,
+                message: 'Active account session is missing.',
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    final result = await ref
+        .read(mailboxRepositoryProvider)
+        .moveMessagesToTrash(
+          accountId: account.id,
+          folder: folder,
+          messageIds: messageIds,
+        );
+    if (result.movedMessageIds.isNotEmpty) {
+      final movedIds = result.movedMessageIds.toSet();
+      state = AsyncData(
+        current.copyWith(
+          messages: current.messages
+              .where((message) => !movedIds.contains(message.id))
+              .toList(),
+        ),
+      );
+    }
+    return result;
   }
 
   Future<MailboxMessagesState> _loadFirstPage(MailFolder folder) async {

@@ -3,6 +3,7 @@ import 'package:drift/drift.dart';
 import '../../../data/local/app_database.dart' as db;
 import '../../../data/remote/backend_mail_api_client.dart';
 import '../../../data/secure/secure_storage_service.dart';
+import '../domain/entities/mail_delete_result.dart';
 import '../domain/entities/mail_folder.dart' as domain;
 import '../domain/entities/mail_message_detail.dart';
 import '../domain/entities/mail_message_page.dart';
@@ -648,6 +649,212 @@ class MailboxRepositoryImpl implements MailboxRepository {
   }
 
   @override
+  Future<MailDeleteResult> moveMessagesToTrash({
+    required String accountId,
+    required domain.MailFolder folder,
+    required List<String> messageIds,
+  }) async {
+    if (_isTrashPath(folder.path)) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: messageIds
+            .map(
+              (id) => MailDeleteFailure(
+                messageId: id,
+                message:
+                    'Messages in Trash cannot be deleted from the app yet.',
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    final token = await _authToken(accountId);
+    if (token == null) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: messageIds
+            .map(
+              (id) => MailDeleteFailure(
+                messageId: id,
+                message: 'Active account session is missing.',
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    final uidByMessageId = <String, String>{};
+    final localFailures = <MailDeleteFailure>[];
+    for (final messageId in messageIds.toSet()) {
+      final uid = _uidFromMessageId(messageId);
+      final folderSlug = _folderSlugFromMessageId(accountId, messageId);
+      if (uid == null ||
+          folderSlug == null ||
+          folderSlug.toLowerCase() != folder.path.trim().toLowerCase()) {
+        localFailures.add(
+          MailDeleteFailure(
+            messageId: messageId,
+            message: 'Only synced backend messages can be moved to Trash.',
+          ),
+        );
+        continue;
+      }
+      uidByMessageId[messageId] = uid;
+    }
+
+    if (uidByMessageId.isEmpty) {
+      return MailDeleteResult(movedMessageIds: const [], failed: localFailures);
+    }
+
+    final BackendDeleteResponse response;
+    try {
+      response = await _backendMailApiClient!.deleteMessages(
+        token: token,
+        folder: folder.path,
+        uids: uidByMessageId.values.toList(),
+      );
+    } on BackendMailApiException catch (error) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: [
+          ...localFailures,
+          ...uidByMessageId.keys.map(
+            (id) =>
+                MailDeleteFailure(messageId: id, message: error.userMessage),
+          ),
+        ],
+      );
+    } catch (_) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: [
+          ...localFailures,
+          ...uidByMessageId.keys.map(
+            (id) => MailDeleteFailure(
+              messageId: id,
+              message: 'Move to Trash failed.',
+            ),
+          ),
+        ],
+      );
+    }
+    final movedIds = response.movedToTrash
+        .map((uid) => _messageId(accountId, folder.path, uid))
+        .where(uidByMessageId.containsKey)
+        .toList();
+    await _removeCachedMessages(accountId: accountId, messageIds: movedIds);
+
+    final backendFailures = response.failed.map((failure) {
+      final messageId = _messageId(accountId, folder.path, failure.uid);
+      return MailDeleteFailure(
+        messageId: messageId,
+        message: failure.detail.trim().isEmpty
+            ? (failure.error.trim().isEmpty
+                  ? 'Move to Trash failed.'
+                  : failure.error)
+            : failure.detail,
+      );
+    }).toList();
+
+    return MailDeleteResult(
+      movedMessageIds: movedIds,
+      failed: [...localFailures, ...backendFailures],
+    );
+  }
+
+  @override
+  Future<MailDeleteResult> moveMessageToTrash({
+    required String accountId,
+    required String messageId,
+  }) async {
+    final uid = _uidFromMessageId(messageId);
+    if (uid == null) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: [
+          MailDeleteFailure(
+            messageId: messageId,
+            message: 'Only synced backend messages can be moved to Trash.',
+          ),
+        ],
+      );
+    }
+
+    final folderPath = await _folderPathForMessage(accountId, messageId);
+    if (_isTrashPath(folderPath)) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: [
+          MailDeleteFailure(
+            messageId: messageId,
+            message: 'Messages in Trash cannot be deleted from the app yet.',
+          ),
+        ],
+      );
+    }
+
+    final token = await _authToken(accountId);
+    if (token == null) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: [
+          MailDeleteFailure(
+            messageId: messageId,
+            message: 'Active account session is missing.',
+          ),
+        ],
+      );
+    }
+
+    final BackendDeleteResponse response;
+    try {
+      response = await _backendMailApiClient!.deleteMessage(
+        token: token,
+        folder: folderPath,
+        uid: uid,
+      );
+    } on BackendMailApiException catch (error) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: [
+          MailDeleteFailure(messageId: messageId, message: error.userMessage),
+        ],
+      );
+    } catch (_) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: [
+          MailDeleteFailure(
+            messageId: messageId,
+            message: 'Move to Trash failed.',
+          ),
+        ],
+      );
+    }
+    final movedIds = response.movedToTrash
+        .map((movedUid) => _messageId(accountId, folderPath, movedUid))
+        .where((id) => id == messageId)
+        .toList();
+    await _removeCachedMessages(accountId: accountId, messageIds: movedIds);
+    return MailDeleteResult(
+      movedMessageIds: movedIds,
+      failed: response.failed
+          .map(
+            (failure) => MailDeleteFailure(
+              messageId: _messageId(accountId, folderPath, failure.uid),
+              message: failure.detail.trim().isEmpty
+                  ? (failure.error.trim().isEmpty
+                        ? 'Move to Trash failed.'
+                        : failure.error)
+                  : failure.detail,
+            ),
+          )
+          .toList(),
+    );
+  }
+
+  @override
   Future<String?> findCachedMessageId({
     required String accountId,
     String? localMessageId,
@@ -899,6 +1106,27 @@ class MailboxRepositoryImpl implements MailboxRepository {
         .write(companion);
   }
 
+  Future<void> _removeCachedMessages({
+    required String accountId,
+    required List<String> messageIds,
+  }) async {
+    if (messageIds.isEmpty) {
+      return;
+    }
+    await _appDatabase.batch((batch) {
+      batch.deleteWhere(
+        _appDatabase.messageSummaries,
+        (table) =>
+            table.accountId.equals(accountId) & table.id.isIn(messageIds),
+      );
+      batch.deleteWhere(
+        _appDatabase.messageDetails,
+        (table) =>
+            table.accountId.equals(accountId) & table.id.isIn(messageIds),
+      );
+    });
+  }
+
   MailMessageDetail _detailFromRow(db.MessageDetail row) {
     return MailMessageDetail(
       id: row.id,
@@ -1002,6 +1230,14 @@ class MailboxRepositoryImpl implements MailboxRepository {
   }
 
   bool _isInboxPath(String path) => path.trim().toLowerCase() == 'inbox';
+
+  bool _isTrashPath(String path) {
+    final normalized = path.trim().toLowerCase();
+    return normalized == 'trash' ||
+        normalized == 'inbox.trash' ||
+        normalized == 'deleted items' ||
+        normalized == 'deleted messages';
+  }
 
   bool _hasFlag(List<String> flags, String flag) {
     return flags.any((value) => value.toLowerCase() == flag.toLowerCase());

@@ -29,6 +29,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   final _visibleQuotedMessageIds = <String>{};
   final _markedReadMessageIds = <String>{};
   String? _initializedThreadMessageId;
+  bool _isDeleting = false;
 
   @override
   Widget build(BuildContext context) {
@@ -39,49 +40,140 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            _MessageTopBar(
-              onBack: () {
-                if (context.canPop()) {
-                  context.pop();
-                } else {
-                  context.go(AppRoute.inbox.path);
-                }
-              },
-            ),
             Expanded(
               child: threadAsync.when(
                 data: (thread) {
                   _ensureDefaultExpansion(thread);
                   _markSelectedMessageRead(thread);
-                  return _MessageThreadContent(
-                    thread: thread,
-                    expandedMessageIds: _expandedMessageIds,
-                    visibleQuotedMessageIds: _visibleQuotedMessageIds,
-                    onToggleExpanded: _toggleExpanded,
-                    onToggleQuoted: _toggleQuoted,
-                    onReply: (message) => _openCompose(
-                      context: context,
-                      thread: thread,
-                      message: message,
-                      action: ReplyAction.reply,
-                    ),
-                    onForward: (message) => _openCompose(
-                      context: context,
-                      thread: thread,
-                      message: message,
-                      action: ReplyAction.forward,
-                    ),
+                  return Column(
+                    children: [
+                      _MessageTopBar(
+                        isDeleting: _isDeleting,
+                        deleteEnabled: !_selectedMessageIsTrash(thread),
+                        onBack: _navigateBack,
+                        onDelete: () => _moveSelectedMessageToTrash(thread),
+                      ),
+                      Expanded(
+                        child: _MessageThreadContent(
+                          thread: thread,
+                          expandedMessageIds: _expandedMessageIds,
+                          visibleQuotedMessageIds: _visibleQuotedMessageIds,
+                          onToggleExpanded: _toggleExpanded,
+                          onToggleQuoted: _toggleQuoted,
+                          onReply: (message) => _openCompose(
+                            context: context,
+                            thread: thread,
+                            message: message,
+                            action: ReplyAction.reply,
+                          ),
+                          onForward: (message) => _openCompose(
+                            context: context,
+                            thread: thread,
+                            message: message,
+                            action: ReplyAction.forward,
+                          ),
+                        ),
+                      ),
+                    ],
                   );
                 },
-                error: (error, stackTrace) =>
-                    ErrorStateView(message: error.toString()),
-                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (error, stackTrace) => Column(
+                  children: [
+                    _MessageTopBar(
+                      isDeleting: false,
+                      deleteEnabled: false,
+                      onBack: _navigateBack,
+                      onDelete: () {},
+                    ),
+                    Expanded(child: ErrorStateView(message: error.toString())),
+                  ],
+                ),
+                loading: () => Column(
+                  children: [
+                    _MessageTopBar(
+                      isDeleting: false,
+                      deleteEnabled: false,
+                      onBack: _navigateBack,
+                      onDelete: () {},
+                    ),
+                    const Expanded(
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  void _navigateBack() {
+    if (context.canPop()) {
+      context.pop();
+    } else {
+      context.go(AppRoute.inbox.path);
+    }
+  }
+
+  Future<void> _moveSelectedMessageToTrash(MailThread thread) async {
+    if (_isDeleting || _selectedMessageIsTrash(thread)) {
+      return;
+    }
+    final account = await ref.read(activeAccountProvider.future);
+    if (account == null) {
+      return;
+    }
+
+    setState(() => _isDeleting = true);
+    try {
+      final result = await ref
+          .read(mailboxRepositoryProvider)
+          .moveMessageToTrash(
+            accountId: account.id,
+            messageId: thread.selectedMessageId,
+          );
+      if (!mounted) {
+        return;
+      }
+      if (result.movedAny) {
+        ref.invalidate(mailboxMessagesControllerProvider);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Moved message to Trash.')),
+        );
+        _navigateBack();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result.failed.isEmpty
+                  ? 'Move to Trash failed.'
+                  : result.failed.first.message,
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isDeleting = false);
+      }
+    }
+  }
+
+  bool _selectedMessageIsTrash(MailThread thread) {
+    MailThreadMessage? selected;
+    for (final message in thread.messages) {
+      if (message.id == thread.selectedMessageId) {
+        selected = message;
+        break;
+      }
+    }
+    final folderName = selected?.folderName.trim().toLowerCase() ?? '';
+    return folderName == 'trash' ||
+        folderName == 'inbox.trash' ||
+        folderName == 'deleted items' ||
+        folderName == 'deleted messages';
   }
 
   void _ensureDefaultExpansion(MailThread thread) {
@@ -167,9 +259,17 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
 }
 
 class _MessageTopBar extends StatelessWidget {
-  const _MessageTopBar({required this.onBack});
+  const _MessageTopBar({
+    required this.onBack,
+    required this.onDelete,
+    required this.deleteEnabled,
+    required this.isDeleting,
+  });
 
   final VoidCallback onBack;
+  final VoidCallback onDelete;
+  final bool deleteEnabled;
+  final bool isDeleting;
 
   @override
   Widget build(BuildContext context) {
@@ -190,8 +290,14 @@ class _MessageTopBar extends StatelessWidget {
           ),
           IconButton(
             tooltip: 'Delete',
-            onPressed: () {},
-            icon: const Icon(Icons.delete_outline),
+            onPressed: deleteEnabled && !isDeleting ? onDelete : null,
+            icon: isDeleting
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2.4),
+                  )
+                : const Icon(Icons.delete_outline),
           ),
           IconButton(
             tooltip: 'Mark unread',

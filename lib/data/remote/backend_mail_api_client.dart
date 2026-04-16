@@ -95,6 +95,34 @@ class BackendMailApiClient {
     return BackendSendResponse.fromJson(json);
   }
 
+  Future<BackendDeleteResponse> deleteMessages({
+    required String token,
+    required String folder,
+    required List<String> uids,
+  }) async {
+    final json = await _requestJson(
+      method: 'POST',
+      path: '/api/mail/messages/delete',
+      token: token,
+      body: {'folder': folder, 'uids': uids},
+    );
+    return BackendDeleteResponse.fromJson(json);
+  }
+
+  Future<BackendDeleteResponse> deleteMessage({
+    required String token,
+    required String folder,
+    required String uid,
+  }) async {
+    final json = await _requestJson(
+      method: 'POST',
+      path: '/api/mail/messages/${Uri.encodeComponent(uid)}/delete',
+      queryParameters: {'folder': folder},
+      token: token,
+    );
+    return BackendDeleteResponse.fromJson(json);
+  }
+
   Future<Map<String, dynamic>> _requestJson({
     required String method,
     required String path,
@@ -194,6 +222,14 @@ class BackendMailApiException implements Exception {
     }
     if (currentCode == 'invalid_limit' || currentCode == 'invalid_before_uid') {
       return 'The mailbox request was invalid.';
+    }
+    if (currentCode == 'invalid_folder' ||
+        currentCode == 'empty_uid_list' ||
+        currentCode == 'invalid_uid') {
+      return 'The delete request was invalid.';
+    }
+    if (currentCode == 'delete_from_trash_not_supported') {
+      return 'Messages in Trash cannot be deleted from the app yet.';
     }
     if (currentCode == 'mail_timeout') {
       return 'The mail server timed out. Try again.';
@@ -504,6 +540,60 @@ class BackendSendResponse {
       accountEmail: json['account_email'] as String? ?? '',
       status: json['status'] as String? ?? '',
       messageId: json['message_id'] as String?,
+    );
+  }
+}
+
+class BackendDeleteResponse {
+  const BackendDeleteResponse({
+    required this.accountEmail,
+    required this.folder,
+    required this.trashFolder,
+    required this.success,
+    required this.partial,
+    required this.movedToTrash,
+    required this.failed,
+  });
+
+  final String accountEmail;
+  final String folder;
+  final String trashFolder;
+  final bool success;
+  final bool partial;
+  final List<String> movedToTrash;
+  final List<BackendDeleteFailureDto> failed;
+
+  factory BackendDeleteResponse.fromJson(Map<String, dynamic> json) {
+    return BackendDeleteResponse(
+      accountEmail: json['account_email'] as String? ?? '',
+      folder: json['folder'] as String? ?? '',
+      trashFolder: json['trash_folder'] as String? ?? '',
+      success: json['success'] as bool? ?? false,
+      partial: json['partial'] as bool? ?? false,
+      movedToTrash: _listOfStrings(json['moved_to_trash']),
+      failed: _listOfObjects(
+        json['failed'],
+      ).map(BackendDeleteFailureDto.fromJson).toList(),
+    );
+  }
+}
+
+class BackendDeleteFailureDto {
+  const BackendDeleteFailureDto({
+    required this.uid,
+    required this.error,
+    required this.detail,
+  });
+
+  final String uid;
+  final String error;
+  final String detail;
+
+  factory BackendDeleteFailureDto.fromJson(Map<String, dynamic> json) {
+    return BackendDeleteFailureDto(
+      uid: json['uid']?.toString() ?? '',
+      error: json['error'] as String? ?? '',
+      detail: json['detail'] as String? ?? '',
     );
   }
 }

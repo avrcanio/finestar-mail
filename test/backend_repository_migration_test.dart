@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:finestar_mail/core/result/result.dart';
 import 'package:finestar_mail/data/local/app_database.dart' as db;
@@ -258,6 +259,184 @@ void main() {
   });
 
   test(
+    'mailbox repository moves backend messages to trash and removes cache rows',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      final storage = _MemorySecureStorageService();
+      addTearDown(database.close);
+      await storage.saveAuthToken(
+        accountId: 'app-test-1@finestar.hr',
+        token: 'backend-token',
+      );
+      const folder = MailFolder(
+        id: 'app-test-1@finestar.hr:inbox',
+        name: 'INBOX',
+        path: 'INBOX',
+        isInbox: true,
+      );
+      await _insertFolder(database, folder);
+      await _insertCachedBackendMessage(database, uid: '42');
+      await _insertCachedBackendMessage(database, uid: '41');
+
+      final repository = MailboxRepositoryImpl(
+        appDatabase: database,
+        secureStorageService: storage,
+        backendMailApiClient: BackendMailApiClient(
+          httpClient: MockClient((request) async {
+            expect(request.url.path, '/api/mail/messages/delete');
+            expect(request.headers['Authorization'], 'Token backend-token');
+            expect(jsonDecode(request.body), {
+              'folder': 'INBOX',
+              'uids': ['42', '41'],
+            });
+            return http.Response(
+              jsonEncode({
+                'account_email': 'app-test-1@finestar.hr',
+                'folder': 'INBOX',
+                'trash_folder': 'Trash',
+                'success': false,
+                'partial': true,
+                'moved_to_trash': ['42'],
+                'failed': [
+                  {
+                    'uid': '41',
+                    'error': 'move_failed',
+                    'detail': 'Unable to move UID 41',
+                  },
+                ],
+              }),
+              200,
+            );
+          }),
+          baseUrlLoader: () async => 'https://mail.example.test',
+        ),
+      );
+
+      final result = await repository.moveMessagesToTrash(
+        accountId: 'app-test-1@finestar.hr',
+        folder: folder,
+        messageIds: [
+          'app-test-1@finestar.hr:inbox:api:42',
+          'app-test-1@finestar.hr:inbox:api:41',
+        ],
+      );
+
+      expect(result.movedMessageIds, ['app-test-1@finestar.hr:inbox:api:42']);
+      expect(
+        result.failed.single.messageId,
+        'app-test-1@finestar.hr:inbox:api:41',
+      );
+      expect(
+        await _cachedSummary(database, 'app-test-1@finestar.hr:inbox:api:42'),
+        isNull,
+      );
+      expect(
+        await _cachedDetail(database, 'app-test-1@finestar.hr:inbox:api:42'),
+        isNull,
+      );
+      expect(
+        await _cachedSummary(database, 'app-test-1@finestar.hr:inbox:api:41'),
+        isNotNull,
+      );
+    },
+  );
+
+  test('mailbox repository single delete derives folder and uid', () async {
+    final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+    final storage = _MemorySecureStorageService();
+    addTearDown(database.close);
+    await storage.saveAuthToken(
+      accountId: 'app-test-1@finestar.hr',
+      token: 'backend-token',
+    );
+    const folder = MailFolder(
+      id: 'app-test-1@finestar.hr:inbox',
+      name: 'INBOX',
+      path: 'INBOX',
+      isInbox: true,
+    );
+    await _insertFolder(database, folder);
+    await _insertCachedBackendMessage(database, uid: '42');
+
+    final repository = MailboxRepositoryImpl(
+      appDatabase: database,
+      secureStorageService: storage,
+      backendMailApiClient: BackendMailApiClient(
+        httpClient: MockClient((request) async {
+          expect(request.url.path, '/api/mail/messages/42/delete');
+          expect(request.url.queryParameters['folder'], 'INBOX');
+          expect(request.headers['Authorization'], 'Token backend-token');
+          return http.Response(
+            jsonEncode({
+              'account_email': 'app-test-1@finestar.hr',
+              'folder': 'INBOX',
+              'trash_folder': 'Trash',
+              'success': true,
+              'partial': false,
+              'moved_to_trash': ['42'],
+              'failed': [],
+            }),
+            200,
+          );
+        }),
+        baseUrlLoader: () async => 'https://mail.example.test',
+      ),
+    );
+
+    final result = await repository.moveMessageToTrash(
+      accountId: 'app-test-1@finestar.hr',
+      messageId: 'app-test-1@finestar.hr:inbox:api:42',
+    );
+
+    expect(result.movedMessageIds, ['app-test-1@finestar.hr:inbox:api:42']);
+    expect(
+      await _cachedSummary(database, 'app-test-1@finestar.hr:inbox:api:42'),
+      isNull,
+    );
+  });
+
+  test(
+    'mailbox repository rejects local-only trash moves without http',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      final storage = _MemorySecureStorageService();
+      addTearDown(database.close);
+      var httpCalls = 0;
+      const folder = MailFolder(
+        id: 'app-test-1@finestar.hr:inbox',
+        name: 'INBOX',
+        path: 'INBOX',
+        isInbox: true,
+      );
+
+      final repository = MailboxRepositoryImpl(
+        appDatabase: database,
+        secureStorageService: storage,
+        backendMailApiClient: BackendMailApiClient(
+          httpClient: MockClient((request) async {
+            httpCalls++;
+            return http.Response('{}', 500);
+          }),
+          baseUrlLoader: () async => 'https://mail.example.test',
+        ),
+      );
+
+      final result = await repository.moveMessagesToTrash(
+        accountId: 'app-test-1@finestar.hr',
+        folder: folder,
+        messageIds: ['app-test-1@finestar.hr:inbox:local:42'],
+      );
+
+      expect(result.movedMessageIds, isEmpty);
+      expect(
+        result.failed.single.messageId,
+        'app-test-1@finestar.hr:inbox:local:42',
+      );
+      expect(httpCalls, 0);
+    },
+  );
+
+  test(
     'compose repository posts backend send payload and caches sent mail',
     () async {
       final database = db.AppDatabase.forTesting(NativeDatabase.memory());
@@ -445,6 +624,71 @@ void main() {
       }
     },
   );
+}
+
+Future<void> _insertFolder(db.AppDatabase database, MailFolder folder) async {
+  await database
+      .into(database.mailFolders)
+      .insert(
+        db.MailFoldersCompanion.insert(
+          id: folder.id,
+          accountId: 'app-test-1@finestar.hr',
+          name: folder.name,
+          path: folder.path,
+          isInbox: folder.isInbox,
+        ),
+      );
+}
+
+Future<void> _insertCachedBackendMessage(
+  db.AppDatabase database, {
+  required String uid,
+}) async {
+  final id = 'app-test-1@finestar.hr:inbox:api:$uid';
+  final receivedAt = DateTime.utc(2026, 4, 16, 7, int.parse(uid) % 60);
+  await database
+      .into(database.messageSummaries)
+      .insert(
+        db.MessageSummariesCompanion.insert(
+          id: id,
+          accountId: const Value('app-test-1@finestar.hr'),
+          folderId: 'app-test-1@finestar.hr:inbox',
+          subject: 'Backend message $uid',
+          sender: 'sender@example.test',
+          preview: 'Preview $uid',
+          receivedAt: receivedAt,
+          isRead: false,
+          hasAttachments: false,
+          sequence: int.parse(uid),
+        ),
+      );
+  await database
+      .into(database.messageDetails)
+      .insert(
+        db.MessageDetailsCompanion.insert(
+          id: id,
+          accountId: const Value('app-test-1@finestar.hr'),
+          folderId: const Value('app-test-1@finestar.hr:inbox'),
+          subject: 'Backend message $uid',
+          sender: 'sender@example.test',
+          recipients: 'app-test-1@finestar.hr',
+          bodyPlain: 'Body $uid',
+          receivedAt: receivedAt,
+          messageIdHeader: Value('<$uid@example.test>'),
+        ),
+      );
+}
+
+Future<db.MessageSummary?> _cachedSummary(db.AppDatabase database, String id) {
+  return (database.select(
+    database.messageSummaries,
+  )..where((table) => table.id.equals(id))).getSingleOrNull();
+}
+
+Future<db.MessageDetail?> _cachedDetail(db.AppDatabase database, String id) {
+  return (database.select(
+    database.messageDetails,
+  )..where((table) => table.id.equals(id))).getSingleOrNull();
 }
 
 Future<void> _insertAccountAndToken(

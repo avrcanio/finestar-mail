@@ -1,5 +1,6 @@
 import 'package:finestar_mail/features/auth/domain/entities/connection_settings.dart';
 import 'package:finestar_mail/features/auth/domain/entities/mail_account.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_delete_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
@@ -181,6 +182,19 @@ class _FakeMailboxRepository implements MailboxRepository {
   }) {
     throw UnimplementedError();
   }
+
+  @override
+  Future<MailDeleteResult> moveMessagesToTrash({
+    required String accountId,
+    required MailFolder folder,
+    required List<String> messageIds,
+  }) async => const MailDeleteResult(movedMessageIds: [], failed: []);
+
+  @override
+  Future<MailDeleteResult> moveMessageToTrash({
+    required String accountId,
+    required String messageId,
+  }) async => const MailDeleteResult(movedMessageIds: [], failed: []);
 
   @override
   Future<List<MailMessageSummary>> searchMessages({
