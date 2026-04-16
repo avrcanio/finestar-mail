@@ -334,6 +334,143 @@ void main() {
       expect(details.single.bodyPlain, 'Hello from backend.');
     },
   );
+
+  test(
+    'compose repository normalizes display-name recipients before send and sent cache',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      final storage = _MemorySecureStorageService();
+      addTearDown(database.close);
+      await _insertAccountAndToken(database, storage);
+
+      final repository = ComposeRepositoryImpl(
+        appDatabase: database,
+        logger: Logger(printer: SimplePrinter(printTime: false)),
+        secureStorageService: storage,
+        backendMailApiClient: BackendMailApiClient(
+          httpClient: MockClient((request) async {
+            expect(request.url.path, '/api/mail/send');
+            expect(jsonDecode(request.body), {
+              'to': ['client@example.test'],
+              'cc': ['copy@example.test'],
+              'bcc': ['hidden@example.test'],
+              'subject': 'Display recipient send',
+              'text_body': 'Hello from backend.',
+              'html_body': '',
+              'reply_to': null,
+              'from_display_name': 'App Test',
+            });
+            return http.Response(
+              jsonEncode({
+                'account_email': 'app-test-1@finestar.hr',
+                'status': 'sent',
+                'message_id': '<sent@example.test>',
+              }),
+              200,
+            );
+          }),
+          baseUrlLoader: () async => 'https://mail.example.test',
+        ),
+      );
+
+      final result = await repository.send(
+        const OutgoingMessage(
+          accountId: 'app-test-1@finestar.hr',
+          to: ['Client Name <client@example.test>'],
+          cc: ['Copy Name <copy@example.test>'],
+          bcc: ['Hidden Name <hidden@example.test>'],
+          subject: 'Display recipient send',
+          body: 'Hello from backend.',
+          attachments: [],
+        ),
+      );
+
+      expect(result, isA<Success<void>>());
+      final details = await database.select(database.messageDetails).get();
+      expect(
+        details.single.recipients,
+        'client@example.test,copy@example.test,hidden@example.test',
+      );
+    },
+  );
+
+  test(
+    'compose repository rejects malformed and packed recipients before http',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      final storage = _MemorySecureStorageService();
+      addTearDown(database.close);
+      var httpCalls = 0;
+
+      final repository = ComposeRepositoryImpl(
+        appDatabase: database,
+        logger: Logger(printer: SimplePrinter(printTime: false)),
+        secureStorageService: storage,
+        backendMailApiClient: BackendMailApiClient(
+          httpClient: MockClient((request) async {
+            httpCalls++;
+            return http.Response('{}', 500);
+          }),
+          baseUrlLoader: () async => 'https://mail.example.test',
+        ),
+      );
+
+      for (final recipient in [
+        '',
+        'Client Name <not-an-email>',
+        'client@example.test, other@example.test',
+        'Client Name <client@example.test> trailing',
+      ]) {
+        final result = await repository.send(
+          OutgoingMessage(
+            accountId: 'app-test-1@finestar.hr',
+            to: [recipient],
+            cc: const [],
+            bcc: const [],
+            subject: 'Invalid recipient send',
+            body: 'Hello from backend.',
+            attachments: const [],
+          ),
+        );
+
+        expect(
+          result,
+          isA<Failure<void>>().having(
+            (failure) => failure.message,
+            'message',
+            'Recipient addresses must be valid email addresses.',
+          ),
+        );
+        expect(httpCalls, 0);
+      }
+    },
+  );
+}
+
+Future<void> _insertAccountAndToken(
+  db.AppDatabase database,
+  _MemorySecureStorageService storage,
+) async {
+  await database
+      .into(database.accounts)
+      .insert(
+        db.AccountsCompanion.insert(
+          id: 'app-test-1@finestar.hr',
+          email: 'app-test-1@finestar.hr',
+          displayName: 'App Test',
+          imapHost: _settings.imapHost,
+          imapPort: _settings.imapPort,
+          imapSecurity: _settings.imapSecurity.name,
+          smtpHost: _settings.smtpHost,
+          smtpPort: _settings.smtpPort,
+          smtpSecurity: _settings.smtpSecurity.name,
+          createdAt: DateTime(2026, 4, 16),
+        ),
+      );
+  await storage.saveAuthToken(
+    accountId: 'app-test-1@finestar.hr',
+    token: 'backend-token',
+  );
 }
 
 const _settings = ConnectionSettings(

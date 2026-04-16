@@ -29,6 +29,17 @@ class ComposeRepositoryImpl implements ComposeRepository {
     if (message.to.isEmpty || message.subject.trim().isEmpty) {
       return const Failure<void>('Recipient and subject are required.');
     }
+    final normalizedTo = _normalizeRecipients(message.to);
+    final normalizedCc = _normalizeRecipients(message.cc);
+    final normalizedBcc = _normalizeRecipients(message.bcc);
+    if (normalizedTo == null ||
+        normalizedTo.isEmpty ||
+        normalizedCc == null ||
+        normalizedBcc == null) {
+      return const Failure<void>(
+        'Recipient addresses must be valid email addresses.',
+      );
+    }
 
     final account = await (_appDatabase.select(
       _appDatabase.accounts,
@@ -42,9 +53,9 @@ class ComposeRepositoryImpl implements ComposeRepository {
       final response = await _backendMailApiClient.send(
         token: token,
         request: BackendSendRequest(
-          to: message.to,
-          cc: message.cc,
-          bcc: message.bcc,
+          to: normalizedTo,
+          cc: normalizedCc,
+          bcc: normalizedBcc,
           subject: message.subject,
           textBody: message.body,
           htmlBody: '',
@@ -55,11 +66,12 @@ class ComposeRepositoryImpl implements ComposeRepository {
       await _cacheSentMessage(
         account: account,
         message: message,
+        recipients: [...normalizedTo, ...normalizedCc, ...normalizedBcc],
         backendMessageId: response.messageId,
       );
 
       _logger.i(
-        'Sent backend message to ${message.to.join(', ')} from ${message.accountId}',
+        'Sent backend message to ${normalizedTo.join(', ')} from ${message.accountId}',
       );
       return const Success<void>(null);
     } on BackendMailApiException catch (error, stackTrace) {
@@ -82,6 +94,7 @@ class ComposeRepositoryImpl implements ComposeRepository {
   Future<void> _cacheSentMessage({
     required Account account,
     required OutgoingMessage message,
+    required List<String> recipients,
     required String? backendMessageId,
   }) async {
     final sentPath = await _sentFolderPath(account.id);
@@ -89,7 +102,6 @@ class ComposeRepositoryImpl implements ComposeRepository {
     final sentAt = DateTime.now();
     final localMessageId =
         '${account.id}:${sentPath.trim().toLowerCase()}:local:${sentAt.microsecondsSinceEpoch}';
-    final recipients = [...message.to, ...message.cc, ...message.bcc];
 
     await _appDatabase.batch((batch) {
       batch.insert(
@@ -177,5 +189,57 @@ class ComposeRepositoryImpl implements ComposeRepository {
       return collapsed;
     }
     return '${collapsed.substring(0, 140)}...';
+  }
+
+  List<String>? _normalizeRecipients(List<String> recipients) {
+    final normalized = <String>[];
+    for (final recipient in recipients) {
+      final normalizedRecipient = _normalizeRecipient(recipient);
+      if (normalizedRecipient == null) {
+        return null;
+      }
+      normalized.add(normalizedRecipient);
+    }
+    return normalized;
+  }
+
+  String? _normalizeRecipient(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty ||
+        trimmed.contains(',') ||
+        trimmed.contains(';') ||
+        trimmed.contains('\n') ||
+        trimmed.contains('\r')) {
+      return null;
+    }
+
+    if (trimmed.contains('<') || trimmed.contains('>')) {
+      final openIndex = trimmed.indexOf('<');
+      final closeIndex = trimmed.indexOf('>');
+      final hasExactlyOnePair =
+          openIndex == trimmed.lastIndexOf('<') &&
+          closeIndex == trimmed.lastIndexOf('>');
+      if (!hasExactlyOnePair ||
+          openIndex <= 0 ||
+          closeIndex <= openIndex + 1 ||
+          trimmed.substring(closeIndex + 1).trim().isNotEmpty) {
+        return null;
+      }
+      final address = trimmed.substring(openIndex + 1, closeIndex).trim();
+      return _isValidEmail(address) ? address : null;
+    }
+
+    if (trimmed.contains(RegExp(r'\s'))) {
+      return null;
+    }
+    return _isValidEmail(trimmed) ? trimmed : null;
+  }
+
+  bool _isValidEmail(String value) {
+    return RegExp(
+      r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+      r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+      r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$",
+    ).hasMatch(value);
   }
 }
