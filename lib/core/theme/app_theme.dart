@@ -15,12 +15,12 @@ ThemeData buildAppTheme() {
   );
 
   final textTheme = GoogleFonts.ibmPlexSansTextTheme().copyWith(
-    displaySmall: GoogleFonts.fraunces(
+    displaySmall: GoogleFonts.ibmPlexSans(
       fontSize: 34,
       fontWeight: FontWeight.w700,
       color: base,
     ),
-    headlineMedium: GoogleFonts.fraunces(
+    headlineMedium: GoogleFonts.ibmPlexSans(
       fontSize: 24,
       fontWeight: FontWeight.w700,
       color: base,

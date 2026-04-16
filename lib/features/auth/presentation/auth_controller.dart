@@ -5,8 +5,12 @@ import '../../../core/result/result.dart';
 import '../domain/entities/connection_settings.dart';
 import '../domain/entities/mail_account.dart';
 
-final currentAccountProvider = FutureProvider<MailAccount?>((ref) {
-  return ref.watch(authRepositoryProvider).getSignedInAccount();
+final accountsProvider = FutureProvider<List<MailAccount>>((ref) {
+  return ref.watch(authRepositoryProvider).getAccounts();
+});
+
+final activeAccountProvider = FutureProvider<MailAccount?>((ref) {
+  return ref.watch(authRepositoryProvider).getActiveAccount();
 });
 
 final authControllerProvider =
@@ -17,7 +21,7 @@ final authControllerProvider =
 class AuthController extends AsyncNotifier<MailAccount?> {
   @override
   Future<MailAccount?> build() async {
-    return ref.watch(authRepositoryProvider).getSignedInAccount();
+    return ref.read(authRepositoryProvider).getActiveAccount();
   }
 
   Future<Result<void>> testConnection({
@@ -27,13 +31,16 @@ class AuthController extends AsyncNotifier<MailAccount?> {
   }) async {
     state = const AsyncLoading();
     final result = await ref
-        .watch(authRepositoryProvider)
+        .read(authRepositoryProvider)
         .testConnection(email: email, password: password, settings: settings);
+    if (!ref.mounted) {
+      return result;
+    }
     state = AsyncData(state.asData?.value);
     return result;
   }
 
-  Future<Result<MailAccount>> signIn({
+  Future<Result<MailAccount>> addAccount({
     required String email,
     required String displayName,
     required String password,
@@ -41,25 +48,45 @@ class AuthController extends AsyncNotifier<MailAccount?> {
   }) async {
     state = const AsyncLoading();
     final result = await ref
-        .watch(authRepositoryProvider)
-        .signIn(
+        .read(authRepositoryProvider)
+        .addAccount(
           email: email,
           displayName: displayName,
           password: password,
           settings: settings,
         );
 
+    if (!ref.mounted) {
+      return result;
+    }
+
     result.when(
-      success: (account) => state = AsyncData(account),
+      success: (account) {
+        ref.invalidate(accountsProvider);
+        ref.invalidate(activeAccountProvider);
+        state = AsyncData(account);
+      },
       failure: (message) => state = AsyncError(message, StackTrace.current),
     );
 
     return result;
   }
 
-  Future<void> signOut() async {
-    await ref.watch(authRepositoryProvider).signOut();
-    state = const AsyncData(null);
-    ref.invalidate(currentAccountProvider);
+  Future<void> setActiveAccount(String accountId) async {
+    final repository = ref.read(authRepositoryProvider);
+    await repository.setActiveAccount(accountId);
+    if (!ref.mounted) {
+      return;
+    }
+    state = AsyncData(await repository.getActiveAccount());
+  }
+
+  Future<void> removeAccount(String accountId) async {
+    final repository = ref.read(authRepositoryProvider);
+    await repository.removeAccount(accountId);
+    if (!ref.mounted) {
+      return;
+    }
+    state = AsyncData(await repository.getActiveAccount());
   }
 }

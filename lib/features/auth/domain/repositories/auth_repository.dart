@@ -3,7 +3,11 @@ import '../entities/connection_settings.dart';
 import '../entities/mail_account.dart';
 
 abstract class AuthRepository {
-  Future<MailAccount?> getSignedInAccount();
+  Future<List<MailAccount>> getAccounts();
+
+  Future<MailAccount?> getActiveAccount();
+
+  Future<void> setActiveAccount(String accountId);
 
   Future<Result<void>> testConnection({
     required String email,
@@ -11,12 +15,12 @@ abstract class AuthRepository {
     required ConnectionSettings settings,
   });
 
-  Future<Result<MailAccount>> signIn({
+  Future<Result<MailAccount>> addAccount({
     required String email,
     required String displayName,
     required String password,
     required ConnectionSettings settings,
   });
 
-  Future<void> signOut();
+  Future<void> removeAccount(String accountId);
 }

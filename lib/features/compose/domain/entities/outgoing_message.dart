@@ -3,6 +3,7 @@ import 'reply_context.dart';
 
 class OutgoingMessage {
   const OutgoingMessage({
+    required this.accountId,
     required this.to,
     required this.cc,
     required this.bcc,
@@ -12,6 +13,7 @@ class OutgoingMessage {
     this.replyContext,
   });
 
+  final String accountId;
   final List<String> to;
   final List<String> cc;
   final List<String> bcc;

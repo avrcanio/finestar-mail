@@ -20,16 +20,51 @@ class AuthRepositoryImpl implements AuthRepository {
   final AppDatabase _appDatabase;
 
   @override
-  Future<MailAccount?> getSignedInAccount() async {
-    final json = await _secureStorageService.readAccount();
-    if (json == null) {
-      return null;
-    }
-    return MailAccount.fromJson(json);
+  Future<List<MailAccount>> getAccounts() async {
+    await _migrateLegacyAccountIfPresent();
+    final rows = await _appDatabase.select(_appDatabase.accounts).get();
+    return rows.map(_accountFromRow).toList();
   }
 
   @override
-  Future<Result<MailAccount>> signIn({
+  Future<MailAccount?> getActiveAccount() async {
+    final accounts = await getAccounts();
+    if (accounts.isEmpty) {
+      await _secureStorageService.clearActiveAccountId();
+      return null;
+    }
+
+    final activeAccountId = await _secureStorageService.readActiveAccountId();
+    MailAccount? activeAccount;
+    for (final account in accounts) {
+      if (account.id == activeAccountId) {
+        activeAccount = account;
+        break;
+      }
+    }
+
+    if (activeAccount != null) {
+      return activeAccount;
+    }
+
+    final fallback = accounts.first;
+    await setActiveAccount(fallback.id);
+    return fallback;
+  }
+
+  @override
+  Future<void> setActiveAccount(String accountId) async {
+    final exists = await (_appDatabase.select(
+      _appDatabase.accounts,
+    )..where((table) => table.id.equals(accountId))).getSingleOrNull();
+
+    if (exists != null) {
+      await _secureStorageService.saveActiveAccountId(accountId);
+    }
+  }
+
+  @override
+  Future<Result<MailAccount>> addAccount({
     required String email,
     required String displayName,
     required String password,
@@ -56,11 +91,6 @@ class AuthRepositoryImpl implements AuthRepository {
       createdAt: DateTime.now(),
     );
 
-    await _secureStorageService.saveAccount(
-      accountJson: account.toJson(),
-      password: password,
-    );
-
     await _appDatabase
         .into(_appDatabase.accounts)
         .insertOnConflictUpdate(
@@ -78,11 +108,49 @@ class AuthRepositoryImpl implements AuthRepository {
           ),
         );
 
+    await _secureStorageService.savePassword(
+      accountId: account.id,
+      password: password,
+    );
+
+    final accounts = await getAccounts();
+    if (accounts.length == 1) {
+      await setActiveAccount(account.id);
+    }
+
     return Success(account);
   }
 
   @override
-  Future<void> signOut() => _secureStorageService.clear();
+  Future<void> removeAccount(String accountId) async {
+    await (_appDatabase.delete(
+      _appDatabase.attachmentMetadata,
+    )..where((table) => table.accountId.equals(accountId))).go();
+    await (_appDatabase.delete(
+      _appDatabase.messageDetails,
+    )..where((table) => table.accountId.equals(accountId))).go();
+    await (_appDatabase.delete(
+      _appDatabase.messageSummaries,
+    )..where((table) => table.accountId.equals(accountId))).go();
+    await (_appDatabase.delete(
+      _appDatabase.mailFolders,
+    )..where((table) => table.accountId.equals(accountId))).go();
+    await (_appDatabase.delete(
+      _appDatabase.accounts,
+    )..where((table) => table.id.equals(accountId))).go();
+
+    await _secureStorageService.deletePassword(accountId);
+
+    final activeAccountId = await _secureStorageService.readActiveAccountId();
+    if (activeAccountId == accountId) {
+      final remaining = await getAccounts();
+      if (remaining.isEmpty) {
+        await _secureStorageService.clearActiveAccountId();
+      } else {
+        await setActiveAccount(remaining.first.id);
+      }
+    }
+  }
 
   @override
   Future<Result<void>> testConnection({
@@ -94,6 +162,47 @@ class AuthRepositoryImpl implements AuthRepository {
       email: email,
       password: password,
       settings: settings,
+    );
+  }
+
+  Future<void> _migrateLegacyAccountIfPresent() {
+    return _secureStorageService.migrateLegacyAccountIfPresent(
+      saveAccount: (json) async {
+        final account = MailAccount.fromJson(json);
+        await _appDatabase
+            .into(_appDatabase.accounts)
+            .insertOnConflictUpdate(
+              AccountsCompanion.insert(
+                id: account.id,
+                email: account.email,
+                displayName: account.displayName,
+                imapHost: account.connectionSettings.imapHost,
+                imapPort: account.connectionSettings.imapPort,
+                imapSecurity: account.connectionSettings.imapSecurity.name,
+                smtpHost: account.connectionSettings.smtpHost,
+                smtpPort: account.connectionSettings.smtpPort,
+                smtpSecurity: account.connectionSettings.smtpSecurity.name,
+                createdAt: account.createdAt,
+              ),
+            );
+      },
+    );
+  }
+
+  MailAccount _accountFromRow(Account row) {
+    return MailAccount(
+      id: row.id,
+      email: row.email,
+      displayName: row.displayName,
+      connectionSettings: ConnectionSettings(
+        imapHost: row.imapHost,
+        imapPort: row.imapPort,
+        imapSecurity: MailSecurity.values.byName(row.imapSecurity),
+        smtpHost: row.smtpHost,
+        smtpPort: row.smtpPort,
+        smtpSecurity: MailSecurity.values.byName(row.smtpSecurity),
+      ),
+      createdAt: row.createdAt,
     );
   }
 }

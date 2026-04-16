@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.CAMERA" />
+
     <application
-        android:label="finestar_mail"
+        android:label="FS Mail"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

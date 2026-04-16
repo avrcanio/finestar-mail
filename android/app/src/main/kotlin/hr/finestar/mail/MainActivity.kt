@@ -1,4 +1,4 @@
-package com.example.finestar_mail
+package hr.finestar.mail
 
 import io.flutter.embedding.android.FlutterActivity
 

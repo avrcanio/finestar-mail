@@ -9,5 +9,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
   final AuthRepository _authRepository;
 
   @override
-  Future<MailAccount?> getAccount() => _authRepository.getSignedInAccount();
+  Future<List<MailAccount>> getAccounts() => _authRepository.getAccounts();
+
+  @override
+  Future<MailAccount?> getActiveAccount() => _authRepository.getActiveAccount();
 }

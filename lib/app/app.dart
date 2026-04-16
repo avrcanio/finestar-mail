@@ -12,7 +12,7 @@ class FinestarMailApp extends ConsumerWidget {
     final router = ref.watch(appRouterProvider);
 
     return MaterialApp.router(
-      title: 'Finestar Mail',
+      title: 'FS Mail',
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(),
       routerConfig: router,

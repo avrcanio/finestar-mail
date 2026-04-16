@@ -8,6 +8,6 @@ void main() {
 
     await tester.pump();
 
-    expect(find.text('Finestar Mail'), findsOneWidget);
+    expect(find.text('FS Mail'), findsOneWidget);
   });
 }

@@ -1,5 +1,7 @@
 import '../../../auth/domain/entities/mail_account.dart';
 
 abstract class SettingsRepository {
-  Future<MailAccount?> getAccount();
+  Future<List<MailAccount>> getAccounts();
+
+  Future<MailAccount?> getActiveAccount();
 }

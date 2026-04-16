@@ -42,11 +42,18 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
 });
 
 final mailboxRepositoryProvider = Provider<MailboxRepository>((ref) {
-  return MailboxRepositoryImpl(appDatabase: ref.watch(appDatabaseProvider));
+  return MailboxRepositoryImpl(
+    appDatabase: ref.watch(appDatabaseProvider),
+    secureStorageService: ref.watch(secureStorageServiceProvider),
+  );
 });
 
 final composeRepositoryProvider = Provider<ComposeRepository>((ref) {
-  return ComposeRepositoryImpl(logger: ref.watch(loggerProvider));
+  return ComposeRepositoryImpl(
+    appDatabase: ref.watch(appDatabaseProvider),
+    logger: ref.watch(loggerProvider),
+    secureStorageService: ref.watch(secureStorageServiceProvider),
+  );
 });
 
 final settingsRepositoryProvider = Provider<SettingsRepository>((ref) {

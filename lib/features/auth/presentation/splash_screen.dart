@@ -12,7 +12,7 @@ class SplashScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    ref.listen(currentAccountProvider, (previous, next) {
+    ref.listen(activeAccountProvider, (previous, next) {
       next.whenData((account) {
         final target = account == null
             ? AppRoute.login.path

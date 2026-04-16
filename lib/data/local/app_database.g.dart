@@ -993,6 +993,18 @@ class $MessageSummariesTable extends MessageSummaries
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<String> accountId = GeneratedColumn<String>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('default'),
+  );
   static const VerificationMeta _folderIdMeta = const VerificationMeta(
     'folderId',
   );
@@ -1086,6 +1098,7 @@ class $MessageSummariesTable extends MessageSummaries
   @override
   List<GeneratedColumn> get $columns => [
     id,
+    accountId,
     folderId,
     subject,
     sender,
@@ -1111,6 +1124,12 @@ class $MessageSummariesTable extends MessageSummaries
       context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
     } else if (isInserting) {
       context.missing(_idMeta);
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
     }
     if (data.containsKey('folder_id')) {
       context.handle(
@@ -1192,6 +1211,10 @@ class $MessageSummariesTable extends MessageSummaries
         DriftSqlType.string,
         data['${effectivePrefix}id'],
       )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}account_id'],
+      )!,
       folderId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}folder_id'],
@@ -1235,6 +1258,7 @@ class $MessageSummariesTable extends MessageSummaries
 
 class MessageSummary extends DataClass implements Insertable<MessageSummary> {
   final String id;
+  final String accountId;
   final String folderId;
   final String subject;
   final String sender;
@@ -1245,6 +1269,7 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
   final int sequence;
   const MessageSummary({
     required this.id,
+    required this.accountId,
     required this.folderId,
     required this.subject,
     required this.sender,
@@ -1258,6 +1283,7 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
     map['id'] = Variable<String>(id);
+    map['account_id'] = Variable<String>(accountId);
     map['folder_id'] = Variable<String>(folderId);
     map['subject'] = Variable<String>(subject);
     map['sender'] = Variable<String>(sender);
@@ -1272,6 +1298,7 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
   MessageSummariesCompanion toCompanion(bool nullToAbsent) {
     return MessageSummariesCompanion(
       id: Value(id),
+      accountId: Value(accountId),
       folderId: Value(folderId),
       subject: Value(subject),
       sender: Value(sender),
@@ -1290,6 +1317,7 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return MessageSummary(
       id: serializer.fromJson<String>(json['id']),
+      accountId: serializer.fromJson<String>(json['accountId']),
       folderId: serializer.fromJson<String>(json['folderId']),
       subject: serializer.fromJson<String>(json['subject']),
       sender: serializer.fromJson<String>(json['sender']),
@@ -1305,6 +1333,7 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
       'id': serializer.toJson<String>(id),
+      'accountId': serializer.toJson<String>(accountId),
       'folderId': serializer.toJson<String>(folderId),
       'subject': serializer.toJson<String>(subject),
       'sender': serializer.toJson<String>(sender),
@@ -1318,6 +1347,7 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
 
   MessageSummary copyWith({
     String? id,
+    String? accountId,
     String? folderId,
     String? subject,
     String? sender,
@@ -1328,6 +1358,7 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
     int? sequence,
   }) => MessageSummary(
     id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
     folderId: folderId ?? this.folderId,
     subject: subject ?? this.subject,
     sender: sender ?? this.sender,
@@ -1340,6 +1371,7 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
   MessageSummary copyWithCompanion(MessageSummariesCompanion data) {
     return MessageSummary(
       id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
       folderId: data.folderId.present ? data.folderId.value : this.folderId,
       subject: data.subject.present ? data.subject.value : this.subject,
       sender: data.sender.present ? data.sender.value : this.sender,
@@ -1359,6 +1391,7 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
   String toString() {
     return (StringBuffer('MessageSummary(')
           ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
           ..write('folderId: $folderId, ')
           ..write('subject: $subject, ')
           ..write('sender: $sender, ')
@@ -1374,6 +1407,7 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
   @override
   int get hashCode => Object.hash(
     id,
+    accountId,
     folderId,
     subject,
     sender,
@@ -1388,6 +1422,7 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
       identical(this, other) ||
       (other is MessageSummary &&
           other.id == this.id &&
+          other.accountId == this.accountId &&
           other.folderId == this.folderId &&
           other.subject == this.subject &&
           other.sender == this.sender &&
@@ -1400,6 +1435,7 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
 
 class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
   final Value<String> id;
+  final Value<String> accountId;
   final Value<String> folderId;
   final Value<String> subject;
   final Value<String> sender;
@@ -1411,6 +1447,7 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
   final Value<int> rowid;
   const MessageSummariesCompanion({
     this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
     this.folderId = const Value.absent(),
     this.subject = const Value.absent(),
     this.sender = const Value.absent(),
@@ -1423,6 +1460,7 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
   });
   MessageSummariesCompanion.insert({
     required String id,
+    this.accountId = const Value.absent(),
     required String folderId,
     required String subject,
     required String sender,
@@ -1443,6 +1481,7 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
        sequence = Value(sequence);
   static Insertable<MessageSummary> custom({
     Expression<String>? id,
+    Expression<String>? accountId,
     Expression<String>? folderId,
     Expression<String>? subject,
     Expression<String>? sender,
@@ -1455,6 +1494,7 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
       if (folderId != null) 'folder_id': folderId,
       if (subject != null) 'subject': subject,
       if (sender != null) 'sender': sender,
@@ -1469,6 +1509,7 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
 
   MessageSummariesCompanion copyWith({
     Value<String>? id,
+    Value<String>? accountId,
     Value<String>? folderId,
     Value<String>? subject,
     Value<String>? sender,
@@ -1481,6 +1522,7 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
   }) {
     return MessageSummariesCompanion(
       id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
       folderId: folderId ?? this.folderId,
       subject: subject ?? this.subject,
       sender: sender ?? this.sender,
@@ -1498,6 +1540,9 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
     final map = <String, Expression>{};
     if (id.present) {
       map['id'] = Variable<String>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<String>(accountId.value);
     }
     if (folderId.present) {
       map['folder_id'] = Variable<String>(folderId.value);
@@ -1533,6 +1578,7 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
   String toString() {
     return (StringBuffer('MessageSummariesCompanion(')
           ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
           ..write('folderId: $folderId, ')
           ..write('subject: $subject, ')
           ..write('sender: $sender, ')
@@ -1561,6 +1607,18 @@ class $MessageDetailsTable extends MessageDetails
     false,
     type: DriftSqlType.string,
     requiredDuringInsert: true,
+  );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<String> accountId = GeneratedColumn<String>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('default'),
   );
   static const VerificationMeta _subjectMeta = const VerificationMeta(
     'subject',
@@ -1629,6 +1687,7 @@ class $MessageDetailsTable extends MessageDetails
   @override
   List<GeneratedColumn> get $columns => [
     id,
+    accountId,
     subject,
     sender,
     recipients,
@@ -1652,6 +1711,12 @@ class $MessageDetailsTable extends MessageDetails
       context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
     } else if (isInserting) {
       context.missing(_idMeta);
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
     }
     if (data.containsKey('subject')) {
       context.handle(
@@ -1712,6 +1777,10 @@ class $MessageDetailsTable extends MessageDetails
         DriftSqlType.string,
         data['${effectivePrefix}id'],
       )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}account_id'],
+      )!,
       subject: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}subject'],
@@ -1747,6 +1816,7 @@ class $MessageDetailsTable extends MessageDetails
 
 class MessageDetail extends DataClass implements Insertable<MessageDetail> {
   final String id;
+  final String accountId;
   final String subject;
   final String sender;
   final String recipients;
@@ -1755,6 +1825,7 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
   final DateTime receivedAt;
   const MessageDetail({
     required this.id,
+    required this.accountId,
     required this.subject,
     required this.sender,
     required this.recipients,
@@ -1766,6 +1837,7 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
     map['id'] = Variable<String>(id);
+    map['account_id'] = Variable<String>(accountId);
     map['subject'] = Variable<String>(subject);
     map['sender'] = Variable<String>(sender);
     map['recipients'] = Variable<String>(recipients);
@@ -1780,6 +1852,7 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
   MessageDetailsCompanion toCompanion(bool nullToAbsent) {
     return MessageDetailsCompanion(
       id: Value(id),
+      accountId: Value(accountId),
       subject: Value(subject),
       sender: Value(sender),
       recipients: Value(recipients),
@@ -1798,6 +1871,7 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return MessageDetail(
       id: serializer.fromJson<String>(json['id']),
+      accountId: serializer.fromJson<String>(json['accountId']),
       subject: serializer.fromJson<String>(json['subject']),
       sender: serializer.fromJson<String>(json['sender']),
       recipients: serializer.fromJson<String>(json['recipients']),
@@ -1811,6 +1885,7 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
       'id': serializer.toJson<String>(id),
+      'accountId': serializer.toJson<String>(accountId),
       'subject': serializer.toJson<String>(subject),
       'sender': serializer.toJson<String>(sender),
       'recipients': serializer.toJson<String>(recipients),
@@ -1822,6 +1897,7 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
 
   MessageDetail copyWith({
     String? id,
+    String? accountId,
     String? subject,
     String? sender,
     String? recipients,
@@ -1830,6 +1906,7 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
     DateTime? receivedAt,
   }) => MessageDetail(
     id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
     subject: subject ?? this.subject,
     sender: sender ?? this.sender,
     recipients: recipients ?? this.recipients,
@@ -1840,6 +1917,7 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
   MessageDetail copyWithCompanion(MessageDetailsCompanion data) {
     return MessageDetail(
       id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
       subject: data.subject.present ? data.subject.value : this.subject,
       sender: data.sender.present ? data.sender.value : this.sender,
       recipients: data.recipients.present
@@ -1857,6 +1935,7 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
   String toString() {
     return (StringBuffer('MessageDetail(')
           ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
           ..write('subject: $subject, ')
           ..write('sender: $sender, ')
           ..write('recipients: $recipients, ')
@@ -1870,6 +1949,7 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
   @override
   int get hashCode => Object.hash(
     id,
+    accountId,
     subject,
     sender,
     recipients,
@@ -1882,6 +1962,7 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
       identical(this, other) ||
       (other is MessageDetail &&
           other.id == this.id &&
+          other.accountId == this.accountId &&
           other.subject == this.subject &&
           other.sender == this.sender &&
           other.recipients == this.recipients &&
@@ -1892,6 +1973,7 @@ class MessageDetail extends DataClass implements Insertable<MessageDetail> {
 
 class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
   final Value<String> id;
+  final Value<String> accountId;
   final Value<String> subject;
   final Value<String> sender;
   final Value<String> recipients;
@@ -1901,6 +1983,7 @@ class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
   final Value<int> rowid;
   const MessageDetailsCompanion({
     this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
     this.subject = const Value.absent(),
     this.sender = const Value.absent(),
     this.recipients = const Value.absent(),
@@ -1911,6 +1994,7 @@ class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
   });
   MessageDetailsCompanion.insert({
     required String id,
+    this.accountId = const Value.absent(),
     required String subject,
     required String sender,
     required String recipients,
@@ -1926,6 +2010,7 @@ class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
        receivedAt = Value(receivedAt);
   static Insertable<MessageDetail> custom({
     Expression<String>? id,
+    Expression<String>? accountId,
     Expression<String>? subject,
     Expression<String>? sender,
     Expression<String>? recipients,
@@ -1936,6 +2021,7 @@ class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
       if (subject != null) 'subject': subject,
       if (sender != null) 'sender': sender,
       if (recipients != null) 'recipients': recipients,
@@ -1948,6 +2034,7 @@ class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
 
   MessageDetailsCompanion copyWith({
     Value<String>? id,
+    Value<String>? accountId,
     Value<String>? subject,
     Value<String>? sender,
     Value<String>? recipients,
@@ -1958,6 +2045,7 @@ class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
   }) {
     return MessageDetailsCompanion(
       id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
       subject: subject ?? this.subject,
       sender: sender ?? this.sender,
       recipients: recipients ?? this.recipients,
@@ -1973,6 +2061,9 @@ class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
     final map = <String, Expression>{};
     if (id.present) {
       map['id'] = Variable<String>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<String>(accountId.value);
     }
     if (subject.present) {
       map['subject'] = Variable<String>(subject.value);
@@ -2002,6 +2093,7 @@ class MessageDetailsCompanion extends UpdateCompanion<MessageDetail> {
   String toString() {
     return (StringBuffer('MessageDetailsCompanion(')
           ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
           ..write('subject: $subject, ')
           ..write('sender: $sender, ')
           ..write('recipients: $recipients, ')
@@ -2028,6 +2120,18 @@ class $AttachmentMetadataTable extends AttachmentMetadata
     false,
     type: DriftSqlType.string,
     requiredDuringInsert: true,
+  );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<String> accountId = GeneratedColumn<String>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('default'),
   );
   static const VerificationMeta _messageIdMeta = const VerificationMeta(
     'messageId',
@@ -2087,6 +2191,7 @@ class $AttachmentMetadataTable extends AttachmentMetadata
   @override
   List<GeneratedColumn> get $columns => [
     id,
+    accountId,
     messageId,
     fileName,
     filePath,
@@ -2109,6 +2214,12 @@ class $AttachmentMetadataTable extends AttachmentMetadata
       context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
     } else if (isInserting) {
       context.missing(_idMeta);
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
     }
     if (data.containsKey('message_id')) {
       context.handle(
@@ -2163,6 +2274,10 @@ class $AttachmentMetadataTable extends AttachmentMetadata
         DriftSqlType.string,
         data['${effectivePrefix}id'],
       )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}account_id'],
+      )!,
       messageId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}message_id'],
@@ -2195,6 +2310,7 @@ class $AttachmentMetadataTable extends AttachmentMetadata
 class AttachmentMetadataData extends DataClass
     implements Insertable<AttachmentMetadataData> {
   final String id;
+  final String accountId;
   final String messageId;
   final String fileName;
   final String filePath;
@@ -2202,6 +2318,7 @@ class AttachmentMetadataData extends DataClass
   final String mimeType;
   const AttachmentMetadataData({
     required this.id,
+    required this.accountId,
     required this.messageId,
     required this.fileName,
     required this.filePath,
@@ -2212,6 +2329,7 @@ class AttachmentMetadataData extends DataClass
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
     map['id'] = Variable<String>(id);
+    map['account_id'] = Variable<String>(accountId);
     map['message_id'] = Variable<String>(messageId);
     map['file_name'] = Variable<String>(fileName);
     map['file_path'] = Variable<String>(filePath);
@@ -2223,6 +2341,7 @@ class AttachmentMetadataData extends DataClass
   AttachmentMetadataCompanion toCompanion(bool nullToAbsent) {
     return AttachmentMetadataCompanion(
       id: Value(id),
+      accountId: Value(accountId),
       messageId: Value(messageId),
       fileName: Value(fileName),
       filePath: Value(filePath),
@@ -2238,6 +2357,7 @@ class AttachmentMetadataData extends DataClass
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return AttachmentMetadataData(
       id: serializer.fromJson<String>(json['id']),
+      accountId: serializer.fromJson<String>(json['accountId']),
       messageId: serializer.fromJson<String>(json['messageId']),
       fileName: serializer.fromJson<String>(json['fileName']),
       filePath: serializer.fromJson<String>(json['filePath']),
@@ -2250,6 +2370,7 @@ class AttachmentMetadataData extends DataClass
     serializer ??= driftRuntimeOptions.defaultSerializer;
     return <String, dynamic>{
       'id': serializer.toJson<String>(id),
+      'accountId': serializer.toJson<String>(accountId),
       'messageId': serializer.toJson<String>(messageId),
       'fileName': serializer.toJson<String>(fileName),
       'filePath': serializer.toJson<String>(filePath),
@@ -2260,6 +2381,7 @@ class AttachmentMetadataData extends DataClass
 
   AttachmentMetadataData copyWith({
     String? id,
+    String? accountId,
     String? messageId,
     String? fileName,
     String? filePath,
@@ -2267,6 +2389,7 @@ class AttachmentMetadataData extends DataClass
     String? mimeType,
   }) => AttachmentMetadataData(
     id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
     messageId: messageId ?? this.messageId,
     fileName: fileName ?? this.fileName,
     filePath: filePath ?? this.filePath,
@@ -2276,6 +2399,7 @@ class AttachmentMetadataData extends DataClass
   AttachmentMetadataData copyWithCompanion(AttachmentMetadataCompanion data) {
     return AttachmentMetadataData(
       id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
       messageId: data.messageId.present ? data.messageId.value : this.messageId,
       fileName: data.fileName.present ? data.fileName.value : this.fileName,
       filePath: data.filePath.present ? data.filePath.value : this.filePath,
@@ -2288,6 +2412,7 @@ class AttachmentMetadataData extends DataClass
   String toString() {
     return (StringBuffer('AttachmentMetadataData(')
           ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
           ..write('messageId: $messageId, ')
           ..write('fileName: $fileName, ')
           ..write('filePath: $filePath, ')
@@ -2298,13 +2423,21 @@ class AttachmentMetadataData extends DataClass
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, messageId, fileName, filePath, sizeBytes, mimeType);
+  int get hashCode => Object.hash(
+    id,
+    accountId,
+    messageId,
+    fileName,
+    filePath,
+    sizeBytes,
+    mimeType,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is AttachmentMetadataData &&
           other.id == this.id &&
+          other.accountId == this.accountId &&
           other.messageId == this.messageId &&
           other.fileName == this.fileName &&
           other.filePath == this.filePath &&
@@ -2315,6 +2448,7 @@ class AttachmentMetadataData extends DataClass
 class AttachmentMetadataCompanion
     extends UpdateCompanion<AttachmentMetadataData> {
   final Value<String> id;
+  final Value<String> accountId;
   final Value<String> messageId;
   final Value<String> fileName;
   final Value<String> filePath;
@@ -2323,6 +2457,7 @@ class AttachmentMetadataCompanion
   final Value<int> rowid;
   const AttachmentMetadataCompanion({
     this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
     this.messageId = const Value.absent(),
     this.fileName = const Value.absent(),
     this.filePath = const Value.absent(),
@@ -2332,6 +2467,7 @@ class AttachmentMetadataCompanion
   });
   AttachmentMetadataCompanion.insert({
     required String id,
+    this.accountId = const Value.absent(),
     required String messageId,
     required String fileName,
     required String filePath,
@@ -2346,6 +2482,7 @@ class AttachmentMetadataCompanion
        mimeType = Value(mimeType);
   static Insertable<AttachmentMetadataData> custom({
     Expression<String>? id,
+    Expression<String>? accountId,
     Expression<String>? messageId,
     Expression<String>? fileName,
     Expression<String>? filePath,
@@ -2355,6 +2492,7 @@ class AttachmentMetadataCompanion
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
       if (messageId != null) 'message_id': messageId,
       if (fileName != null) 'file_name': fileName,
       if (filePath != null) 'file_path': filePath,
@@ -2366,6 +2504,7 @@ class AttachmentMetadataCompanion
 
   AttachmentMetadataCompanion copyWith({
     Value<String>? id,
+    Value<String>? accountId,
     Value<String>? messageId,
     Value<String>? fileName,
     Value<String>? filePath,
@@ -2375,6 +2514,7 @@ class AttachmentMetadataCompanion
   }) {
     return AttachmentMetadataCompanion(
       id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
       messageId: messageId ?? this.messageId,
       fileName: fileName ?? this.fileName,
       filePath: filePath ?? this.filePath,
@@ -2389,6 +2529,9 @@ class AttachmentMetadataCompanion
     final map = <String, Expression>{};
     if (id.present) {
       map['id'] = Variable<String>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<String>(accountId.value);
     }
     if (messageId.present) {
       map['message_id'] = Variable<String>(messageId.value);
@@ -2415,6 +2558,7 @@ class AttachmentMetadataCompanion
   String toString() {
     return (StringBuffer('AttachmentMetadataCompanion(')
           ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
           ..write('messageId: $messageId, ')
           ..write('fileName: $fileName, ')
           ..write('filePath: $filePath, ')
@@ -2948,6 +3092,7 @@ typedef $$MailFoldersTableProcessedTableManager =
 typedef $$MessageSummariesTableCreateCompanionBuilder =
     MessageSummariesCompanion Function({
       required String id,
+      Value<String> accountId,
       required String folderId,
       required String subject,
       required String sender,
@@ -2961,6 +3106,7 @@ typedef $$MessageSummariesTableCreateCompanionBuilder =
 typedef $$MessageSummariesTableUpdateCompanionBuilder =
     MessageSummariesCompanion Function({
       Value<String> id,
+      Value<String> accountId,
       Value<String> folderId,
       Value<String> subject,
       Value<String> sender,
@@ -2983,6 +3129,11 @@ class $$MessageSummariesTableFilterComposer
   });
   ColumnFilters<String> get id => $composableBuilder(
     column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get accountId => $composableBuilder(
+    column: $table.accountId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3041,6 +3192,11 @@ class $$MessageSummariesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get accountId => $composableBuilder(
+    column: $table.accountId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get folderId => $composableBuilder(
     column: $table.folderId,
     builder: (column) => ColumnOrderings(column),
@@ -3093,6 +3249,9 @@ class $$MessageSummariesTableAnnotationComposer
   });
   GeneratedColumn<String> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get accountId =>
+      $composableBuilder(column: $table.accountId, builder: (column) => column);
 
   GeneratedColumn<String> get folderId =>
       $composableBuilder(column: $table.folderId, builder: (column) => column);
@@ -3161,6 +3320,7 @@ class $$MessageSummariesTableTableManager
           updateCompanionCallback:
               ({
                 Value<String> id = const Value.absent(),
+                Value<String> accountId = const Value.absent(),
                 Value<String> folderId = const Value.absent(),
                 Value<String> subject = const Value.absent(),
                 Value<String> sender = const Value.absent(),
@@ -3172,6 +3332,7 @@ class $$MessageSummariesTableTableManager
                 Value<int> rowid = const Value.absent(),
               }) => MessageSummariesCompanion(
                 id: id,
+                accountId: accountId,
                 folderId: folderId,
                 subject: subject,
                 sender: sender,
@@ -3185,6 +3346,7 @@ class $$MessageSummariesTableTableManager
           createCompanionCallback:
               ({
                 required String id,
+                Value<String> accountId = const Value.absent(),
                 required String folderId,
                 required String subject,
                 required String sender,
@@ -3196,6 +3358,7 @@ class $$MessageSummariesTableTableManager
                 Value<int> rowid = const Value.absent(),
               }) => MessageSummariesCompanion.insert(
                 id: id,
+                accountId: accountId,
                 folderId: folderId,
                 subject: subject,
                 sender: sender,
@@ -3234,6 +3397,7 @@ typedef $$MessageSummariesTableProcessedTableManager =
 typedef $$MessageDetailsTableCreateCompanionBuilder =
     MessageDetailsCompanion Function({
       required String id,
+      Value<String> accountId,
       required String subject,
       required String sender,
       required String recipients,
@@ -3245,6 +3409,7 @@ typedef $$MessageDetailsTableCreateCompanionBuilder =
 typedef $$MessageDetailsTableUpdateCompanionBuilder =
     MessageDetailsCompanion Function({
       Value<String> id,
+      Value<String> accountId,
       Value<String> subject,
       Value<String> sender,
       Value<String> recipients,
@@ -3265,6 +3430,11 @@ class $$MessageDetailsTableFilterComposer
   });
   ColumnFilters<String> get id => $composableBuilder(
     column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get accountId => $composableBuilder(
+    column: $table.accountId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3313,6 +3483,11 @@ class $$MessageDetailsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get accountId => $composableBuilder(
+    column: $table.accountId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get subject => $composableBuilder(
     column: $table.subject,
     builder: (column) => ColumnOrderings(column),
@@ -3355,6 +3530,9 @@ class $$MessageDetailsTableAnnotationComposer
   });
   GeneratedColumn<String> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get accountId =>
+      $composableBuilder(column: $table.accountId, builder: (column) => column);
 
   GeneratedColumn<String> get subject =>
       $composableBuilder(column: $table.subject, builder: (column) => column);
@@ -3413,6 +3591,7 @@ class $$MessageDetailsTableTableManager
           updateCompanionCallback:
               ({
                 Value<String> id = const Value.absent(),
+                Value<String> accountId = const Value.absent(),
                 Value<String> subject = const Value.absent(),
                 Value<String> sender = const Value.absent(),
                 Value<String> recipients = const Value.absent(),
@@ -3422,6 +3601,7 @@ class $$MessageDetailsTableTableManager
                 Value<int> rowid = const Value.absent(),
               }) => MessageDetailsCompanion(
                 id: id,
+                accountId: accountId,
                 subject: subject,
                 sender: sender,
                 recipients: recipients,
@@ -3433,6 +3613,7 @@ class $$MessageDetailsTableTableManager
           createCompanionCallback:
               ({
                 required String id,
+                Value<String> accountId = const Value.absent(),
                 required String subject,
                 required String sender,
                 required String recipients,
@@ -3442,6 +3623,7 @@ class $$MessageDetailsTableTableManager
                 Value<int> rowid = const Value.absent(),
               }) => MessageDetailsCompanion.insert(
                 id: id,
+                accountId: accountId,
                 subject: subject,
                 sender: sender,
                 recipients: recipients,
@@ -3478,6 +3660,7 @@ typedef $$MessageDetailsTableProcessedTableManager =
 typedef $$AttachmentMetadataTableCreateCompanionBuilder =
     AttachmentMetadataCompanion Function({
       required String id,
+      Value<String> accountId,
       required String messageId,
       required String fileName,
       required String filePath,
@@ -3488,6 +3671,7 @@ typedef $$AttachmentMetadataTableCreateCompanionBuilder =
 typedef $$AttachmentMetadataTableUpdateCompanionBuilder =
     AttachmentMetadataCompanion Function({
       Value<String> id,
+      Value<String> accountId,
       Value<String> messageId,
       Value<String> fileName,
       Value<String> filePath,
@@ -3507,6 +3691,11 @@ class $$AttachmentMetadataTableFilterComposer
   });
   ColumnFilters<String> get id => $composableBuilder(
     column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get accountId => $composableBuilder(
+    column: $table.accountId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3550,6 +3739,11 @@ class $$AttachmentMetadataTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get accountId => $composableBuilder(
+    column: $table.accountId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get messageId => $composableBuilder(
     column: $table.messageId,
     builder: (column) => ColumnOrderings(column),
@@ -3587,6 +3781,9 @@ class $$AttachmentMetadataTableAnnotationComposer
   });
   GeneratedColumn<String> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get accountId =>
+      $composableBuilder(column: $table.accountId, builder: (column) => column);
 
   GeneratedColumn<String> get messageId =>
       $composableBuilder(column: $table.messageId, builder: (column) => column);
@@ -3645,6 +3842,7 @@ class $$AttachmentMetadataTableTableManager
           updateCompanionCallback:
               ({
                 Value<String> id = const Value.absent(),
+                Value<String> accountId = const Value.absent(),
                 Value<String> messageId = const Value.absent(),
                 Value<String> fileName = const Value.absent(),
                 Value<String> filePath = const Value.absent(),
@@ -3653,6 +3851,7 @@ class $$AttachmentMetadataTableTableManager
                 Value<int> rowid = const Value.absent(),
               }) => AttachmentMetadataCompanion(
                 id: id,
+                accountId: accountId,
                 messageId: messageId,
                 fileName: fileName,
                 filePath: filePath,
@@ -3663,6 +3862,7 @@ class $$AttachmentMetadataTableTableManager
           createCompanionCallback:
               ({
                 required String id,
+                Value<String> accountId = const Value.absent(),
                 required String messageId,
                 required String fileName,
                 required String filePath,
@@ -3671,6 +3871,7 @@ class $$AttachmentMetadataTableTableManager
                 Value<int> rowid = const Value.absent(),
               }) => AttachmentMetadataCompanion.insert(
                 id: id,
+                accountId: accountId,
                 messageId: messageId,
                 fileName: fileName,
                 filePath: filePath,

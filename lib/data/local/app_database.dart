@@ -36,6 +36,7 @@ class MailFolders extends Table {
 
 class MessageSummaries extends Table {
   TextColumn get id => text()();
+  TextColumn get accountId => text().withDefault(const Constant('default'))();
   TextColumn get folderId => text()();
   TextColumn get subject => text()();
   TextColumn get sender => text()();
@@ -51,6 +52,7 @@ class MessageSummaries extends Table {
 
 class MessageDetails extends Table {
   TextColumn get id => text()();
+  TextColumn get accountId => text().withDefault(const Constant('default'))();
   TextColumn get subject => text()();
   TextColumn get sender => text()();
   TextColumn get recipients => text()();
@@ -64,6 +66,7 @@ class MessageDetails extends Table {
 
 class AttachmentMetadata extends Table {
   TextColumn get id => text()();
+  TextColumn get accountId => text().withDefault(const Constant('default'))();
   TextColumn get messageId => text()();
   TextColumn get fileName => text()();
   TextColumn get filePath => text()();
@@ -94,6 +97,23 @@ LazyDatabase _openConnection() {
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
+  AppDatabase.forTesting(super.executor);
+
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (migrator) => migrator.createAll(),
+    onUpgrade: (migrator, from, to) async {
+      if (from < 2) {
+        await migrator.addColumn(messageSummaries, messageSummaries.accountId);
+        await migrator.addColumn(messageDetails, messageDetails.accountId);
+        await migrator.addColumn(
+          attachmentMetadata,
+          attachmentMetadata.accountId,
+        );
+      }
+    },
+  );
 }
