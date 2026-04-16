@@ -33,6 +33,21 @@ class SecureStorageService {
     return _secureStorage.delete(key: _passwordKey(accountId));
   }
 
+  Future<void> saveAuthToken({
+    required String accountId,
+    required String token,
+  }) {
+    return _secureStorage.write(key: _authTokenKey(accountId), value: token);
+  }
+
+  Future<String?> readAuthToken(String accountId) {
+    return _secureStorage.read(key: _authTokenKey(accountId));
+  }
+
+  Future<void> deleteAuthToken(String accountId) {
+    return _secureStorage.delete(key: _authTokenKey(accountId));
+  }
+
   Future<void> clearActiveAccountId() {
     return _secureStorage.delete(key: _activeAccountIdKey);
   }
@@ -61,4 +76,6 @@ class SecureStorageService {
   }
 
   String _passwordKey(String accountId) => 'account_password:$accountId';
+
+  String _authTokenKey(String accountId) => 'account_auth_token:$accountId';
 }

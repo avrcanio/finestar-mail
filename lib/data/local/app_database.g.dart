@@ -1070,6 +1070,20 @@ class $MessageSummariesTable extends MessageSummaries
       'CHECK ("is_read" IN (0, 1))',
     ),
   );
+  static const VerificationMeta _pendingReadStateMeta = const VerificationMeta(
+    'pendingReadState',
+  );
+  @override
+  late final GeneratedColumn<bool> pendingReadState = GeneratedColumn<bool>(
+    'pending_read_state',
+    aliasedName,
+    true,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("pending_read_state" IN (0, 1))',
+    ),
+  );
   static const VerificationMeta _hasAttachmentsMeta = const VerificationMeta(
     'hasAttachments',
   );
@@ -1095,6 +1109,36 @@ class $MessageSummariesTable extends MessageSummaries
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _isImportantMeta = const VerificationMeta(
+    'isImportant',
+  );
+  @override
+  late final GeneratedColumn<bool> isImportant = GeneratedColumn<bool>(
+    'is_important',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_important" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _isPinnedMeta = const VerificationMeta(
+    'isPinned',
+  );
+  @override
+  late final GeneratedColumn<bool> isPinned = GeneratedColumn<bool>(
+    'is_pinned',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_pinned" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1105,8 +1149,11 @@ class $MessageSummariesTable extends MessageSummaries
     preview,
     receivedAt,
     isRead,
+    pendingReadState,
     hasAttachments,
     sequence,
+    isImportant,
+    isPinned,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1179,6 +1226,15 @@ class $MessageSummariesTable extends MessageSummaries
     } else if (isInserting) {
       context.missing(_isReadMeta);
     }
+    if (data.containsKey('pending_read_state')) {
+      context.handle(
+        _pendingReadStateMeta,
+        pendingReadState.isAcceptableOrUnknown(
+          data['pending_read_state']!,
+          _pendingReadStateMeta,
+        ),
+      );
+    }
     if (data.containsKey('has_attachments')) {
       context.handle(
         _hasAttachmentsMeta,
@@ -1197,6 +1253,21 @@ class $MessageSummariesTable extends MessageSummaries
       );
     } else if (isInserting) {
       context.missing(_sequenceMeta);
+    }
+    if (data.containsKey('is_important')) {
+      context.handle(
+        _isImportantMeta,
+        isImportant.isAcceptableOrUnknown(
+          data['is_important']!,
+          _isImportantMeta,
+        ),
+      );
+    }
+    if (data.containsKey('is_pinned')) {
+      context.handle(
+        _isPinnedMeta,
+        isPinned.isAcceptableOrUnknown(data['is_pinned']!, _isPinnedMeta),
+      );
     }
     return context;
   }
@@ -1239,6 +1310,10 @@ class $MessageSummariesTable extends MessageSummaries
         DriftSqlType.bool,
         data['${effectivePrefix}is_read'],
       )!,
+      pendingReadState: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}pending_read_state'],
+      ),
       hasAttachments: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}has_attachments'],
@@ -1246,6 +1321,14 @@ class $MessageSummariesTable extends MessageSummaries
       sequence: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}sequence'],
+      )!,
+      isImportant: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_important'],
+      )!,
+      isPinned: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_pinned'],
       )!,
     );
   }
@@ -1265,8 +1348,11 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
   final String preview;
   final DateTime receivedAt;
   final bool isRead;
+  final bool? pendingReadState;
   final bool hasAttachments;
   final int sequence;
+  final bool isImportant;
+  final bool isPinned;
   const MessageSummary({
     required this.id,
     required this.accountId,
@@ -1276,8 +1362,11 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
     required this.preview,
     required this.receivedAt,
     required this.isRead,
+    this.pendingReadState,
     required this.hasAttachments,
     required this.sequence,
+    required this.isImportant,
+    required this.isPinned,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1290,8 +1379,13 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
     map['preview'] = Variable<String>(preview);
     map['received_at'] = Variable<DateTime>(receivedAt);
     map['is_read'] = Variable<bool>(isRead);
+    if (!nullToAbsent || pendingReadState != null) {
+      map['pending_read_state'] = Variable<bool>(pendingReadState);
+    }
     map['has_attachments'] = Variable<bool>(hasAttachments);
     map['sequence'] = Variable<int>(sequence);
+    map['is_important'] = Variable<bool>(isImportant);
+    map['is_pinned'] = Variable<bool>(isPinned);
     return map;
   }
 
@@ -1305,8 +1399,13 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
       preview: Value(preview),
       receivedAt: Value(receivedAt),
       isRead: Value(isRead),
+      pendingReadState: pendingReadState == null && nullToAbsent
+          ? const Value.absent()
+          : Value(pendingReadState),
       hasAttachments: Value(hasAttachments),
       sequence: Value(sequence),
+      isImportant: Value(isImportant),
+      isPinned: Value(isPinned),
     );
   }
 
@@ -1324,8 +1423,11 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
       preview: serializer.fromJson<String>(json['preview']),
       receivedAt: serializer.fromJson<DateTime>(json['receivedAt']),
       isRead: serializer.fromJson<bool>(json['isRead']),
+      pendingReadState: serializer.fromJson<bool?>(json['pendingReadState']),
       hasAttachments: serializer.fromJson<bool>(json['hasAttachments']),
       sequence: serializer.fromJson<int>(json['sequence']),
+      isImportant: serializer.fromJson<bool>(json['isImportant']),
+      isPinned: serializer.fromJson<bool>(json['isPinned']),
     );
   }
   @override
@@ -1340,8 +1442,11 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
       'preview': serializer.toJson<String>(preview),
       'receivedAt': serializer.toJson<DateTime>(receivedAt),
       'isRead': serializer.toJson<bool>(isRead),
+      'pendingReadState': serializer.toJson<bool?>(pendingReadState),
       'hasAttachments': serializer.toJson<bool>(hasAttachments),
       'sequence': serializer.toJson<int>(sequence),
+      'isImportant': serializer.toJson<bool>(isImportant),
+      'isPinned': serializer.toJson<bool>(isPinned),
     };
   }
 
@@ -1354,8 +1459,11 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
     String? preview,
     DateTime? receivedAt,
     bool? isRead,
+    Value<bool?> pendingReadState = const Value.absent(),
     bool? hasAttachments,
     int? sequence,
+    bool? isImportant,
+    bool? isPinned,
   }) => MessageSummary(
     id: id ?? this.id,
     accountId: accountId ?? this.accountId,
@@ -1365,8 +1473,13 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
     preview: preview ?? this.preview,
     receivedAt: receivedAt ?? this.receivedAt,
     isRead: isRead ?? this.isRead,
+    pendingReadState: pendingReadState.present
+        ? pendingReadState.value
+        : this.pendingReadState,
     hasAttachments: hasAttachments ?? this.hasAttachments,
     sequence: sequence ?? this.sequence,
+    isImportant: isImportant ?? this.isImportant,
+    isPinned: isPinned ?? this.isPinned,
   );
   MessageSummary copyWithCompanion(MessageSummariesCompanion data) {
     return MessageSummary(
@@ -1380,10 +1493,17 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
           ? data.receivedAt.value
           : this.receivedAt,
       isRead: data.isRead.present ? data.isRead.value : this.isRead,
+      pendingReadState: data.pendingReadState.present
+          ? data.pendingReadState.value
+          : this.pendingReadState,
       hasAttachments: data.hasAttachments.present
           ? data.hasAttachments.value
           : this.hasAttachments,
       sequence: data.sequence.present ? data.sequence.value : this.sequence,
+      isImportant: data.isImportant.present
+          ? data.isImportant.value
+          : this.isImportant,
+      isPinned: data.isPinned.present ? data.isPinned.value : this.isPinned,
     );
   }
 
@@ -1398,8 +1518,11 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
           ..write('preview: $preview, ')
           ..write('receivedAt: $receivedAt, ')
           ..write('isRead: $isRead, ')
+          ..write('pendingReadState: $pendingReadState, ')
           ..write('hasAttachments: $hasAttachments, ')
-          ..write('sequence: $sequence')
+          ..write('sequence: $sequence, ')
+          ..write('isImportant: $isImportant, ')
+          ..write('isPinned: $isPinned')
           ..write(')'))
         .toString();
   }
@@ -1414,8 +1537,11 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
     preview,
     receivedAt,
     isRead,
+    pendingReadState,
     hasAttachments,
     sequence,
+    isImportant,
+    isPinned,
   );
   @override
   bool operator ==(Object other) =>
@@ -1429,8 +1555,11 @@ class MessageSummary extends DataClass implements Insertable<MessageSummary> {
           other.preview == this.preview &&
           other.receivedAt == this.receivedAt &&
           other.isRead == this.isRead &&
+          other.pendingReadState == this.pendingReadState &&
           other.hasAttachments == this.hasAttachments &&
-          other.sequence == this.sequence);
+          other.sequence == this.sequence &&
+          other.isImportant == this.isImportant &&
+          other.isPinned == this.isPinned);
 }
 
 class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
@@ -1442,8 +1571,11 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
   final Value<String> preview;
   final Value<DateTime> receivedAt;
   final Value<bool> isRead;
+  final Value<bool?> pendingReadState;
   final Value<bool> hasAttachments;
   final Value<int> sequence;
+  final Value<bool> isImportant;
+  final Value<bool> isPinned;
   final Value<int> rowid;
   const MessageSummariesCompanion({
     this.id = const Value.absent(),
@@ -1454,8 +1586,11 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
     this.preview = const Value.absent(),
     this.receivedAt = const Value.absent(),
     this.isRead = const Value.absent(),
+    this.pendingReadState = const Value.absent(),
     this.hasAttachments = const Value.absent(),
     this.sequence = const Value.absent(),
+    this.isImportant = const Value.absent(),
+    this.isPinned = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MessageSummariesCompanion.insert({
@@ -1467,8 +1602,11 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
     required String preview,
     required DateTime receivedAt,
     required bool isRead,
+    this.pendingReadState = const Value.absent(),
     required bool hasAttachments,
     required int sequence,
+    this.isImportant = const Value.absent(),
+    this.isPinned = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        folderId = Value(folderId),
@@ -1488,8 +1626,11 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
     Expression<String>? preview,
     Expression<DateTime>? receivedAt,
     Expression<bool>? isRead,
+    Expression<bool>? pendingReadState,
     Expression<bool>? hasAttachments,
     Expression<int>? sequence,
+    Expression<bool>? isImportant,
+    Expression<bool>? isPinned,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1501,8 +1642,11 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
       if (preview != null) 'preview': preview,
       if (receivedAt != null) 'received_at': receivedAt,
       if (isRead != null) 'is_read': isRead,
+      if (pendingReadState != null) 'pending_read_state': pendingReadState,
       if (hasAttachments != null) 'has_attachments': hasAttachments,
       if (sequence != null) 'sequence': sequence,
+      if (isImportant != null) 'is_important': isImportant,
+      if (isPinned != null) 'is_pinned': isPinned,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1516,8 +1660,11 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
     Value<String>? preview,
     Value<DateTime>? receivedAt,
     Value<bool>? isRead,
+    Value<bool?>? pendingReadState,
     Value<bool>? hasAttachments,
     Value<int>? sequence,
+    Value<bool>? isImportant,
+    Value<bool>? isPinned,
     Value<int>? rowid,
   }) {
     return MessageSummariesCompanion(
@@ -1529,8 +1676,11 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
       preview: preview ?? this.preview,
       receivedAt: receivedAt ?? this.receivedAt,
       isRead: isRead ?? this.isRead,
+      pendingReadState: pendingReadState ?? this.pendingReadState,
       hasAttachments: hasAttachments ?? this.hasAttachments,
       sequence: sequence ?? this.sequence,
+      isImportant: isImportant ?? this.isImportant,
+      isPinned: isPinned ?? this.isPinned,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1562,11 +1712,20 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
     if (isRead.present) {
       map['is_read'] = Variable<bool>(isRead.value);
     }
+    if (pendingReadState.present) {
+      map['pending_read_state'] = Variable<bool>(pendingReadState.value);
+    }
     if (hasAttachments.present) {
       map['has_attachments'] = Variable<bool>(hasAttachments.value);
     }
     if (sequence.present) {
       map['sequence'] = Variable<int>(sequence.value);
+    }
+    if (isImportant.present) {
+      map['is_important'] = Variable<bool>(isImportant.value);
+    }
+    if (isPinned.present) {
+      map['is_pinned'] = Variable<bool>(isPinned.value);
     }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
@@ -1585,8 +1744,11 @@ class MessageSummariesCompanion extends UpdateCompanion<MessageSummary> {
           ..write('preview: $preview, ')
           ..write('receivedAt: $receivedAt, ')
           ..write('isRead: $isRead, ')
+          ..write('pendingReadState: $pendingReadState, ')
           ..write('hasAttachments: $hasAttachments, ')
           ..write('sequence: $sequence, ')
+          ..write('isImportant: $isImportant, ')
+          ..write('isPinned: $isPinned, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -3313,8 +3475,11 @@ typedef $$MessageSummariesTableCreateCompanionBuilder =
       required String preview,
       required DateTime receivedAt,
       required bool isRead,
+      Value<bool?> pendingReadState,
       required bool hasAttachments,
       required int sequence,
+      Value<bool> isImportant,
+      Value<bool> isPinned,
       Value<int> rowid,
     });
 typedef $$MessageSummariesTableUpdateCompanionBuilder =
@@ -3327,8 +3492,11 @@ typedef $$MessageSummariesTableUpdateCompanionBuilder =
       Value<String> preview,
       Value<DateTime> receivedAt,
       Value<bool> isRead,
+      Value<bool?> pendingReadState,
       Value<bool> hasAttachments,
       Value<int> sequence,
+      Value<bool> isImportant,
+      Value<bool> isPinned,
       Value<int> rowid,
     });
 
@@ -3381,6 +3549,11 @@ class $$MessageSummariesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<bool> get pendingReadState => $composableBuilder(
+    column: $table.pendingReadState,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<bool> get hasAttachments => $composableBuilder(
     column: $table.hasAttachments,
     builder: (column) => ColumnFilters(column),
@@ -3388,6 +3561,16 @@ class $$MessageSummariesTableFilterComposer
 
   ColumnFilters<int> get sequence => $composableBuilder(
     column: $table.sequence,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isImportant => $composableBuilder(
+    column: $table.isImportant,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isPinned => $composableBuilder(
+    column: $table.isPinned,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -3441,6 +3624,11 @@ class $$MessageSummariesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get pendingReadState => $composableBuilder(
+    column: $table.pendingReadState,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get hasAttachments => $composableBuilder(
     column: $table.hasAttachments,
     builder: (column) => ColumnOrderings(column),
@@ -3448,6 +3636,16 @@ class $$MessageSummariesTableOrderingComposer
 
   ColumnOrderings<int> get sequence => $composableBuilder(
     column: $table.sequence,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get isImportant => $composableBuilder(
+    column: $table.isImportant,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get isPinned => $composableBuilder(
+    column: $table.isPinned,
     builder: (column) => ColumnOrderings(column),
   );
 }
@@ -3487,6 +3685,11 @@ class $$MessageSummariesTableAnnotationComposer
   GeneratedColumn<bool> get isRead =>
       $composableBuilder(column: $table.isRead, builder: (column) => column);
 
+  GeneratedColumn<bool> get pendingReadState => $composableBuilder(
+    column: $table.pendingReadState,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<bool> get hasAttachments => $composableBuilder(
     column: $table.hasAttachments,
     builder: (column) => column,
@@ -3494,6 +3697,14 @@ class $$MessageSummariesTableAnnotationComposer
 
   GeneratedColumn<int> get sequence =>
       $composableBuilder(column: $table.sequence, builder: (column) => column);
+
+  GeneratedColumn<bool> get isImportant => $composableBuilder(
+    column: $table.isImportant,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get isPinned =>
+      $composableBuilder(column: $table.isPinned, builder: (column) => column);
 }
 
 class $$MessageSummariesTableTableManager
@@ -3541,8 +3752,11 @@ class $$MessageSummariesTableTableManager
                 Value<String> preview = const Value.absent(),
                 Value<DateTime> receivedAt = const Value.absent(),
                 Value<bool> isRead = const Value.absent(),
+                Value<bool?> pendingReadState = const Value.absent(),
                 Value<bool> hasAttachments = const Value.absent(),
                 Value<int> sequence = const Value.absent(),
+                Value<bool> isImportant = const Value.absent(),
+                Value<bool> isPinned = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessageSummariesCompanion(
                 id: id,
@@ -3553,8 +3767,11 @@ class $$MessageSummariesTableTableManager
                 preview: preview,
                 receivedAt: receivedAt,
                 isRead: isRead,
+                pendingReadState: pendingReadState,
                 hasAttachments: hasAttachments,
                 sequence: sequence,
+                isImportant: isImportant,
+                isPinned: isPinned,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -3567,8 +3784,11 @@ class $$MessageSummariesTableTableManager
                 required String preview,
                 required DateTime receivedAt,
                 required bool isRead,
+                Value<bool?> pendingReadState = const Value.absent(),
                 required bool hasAttachments,
                 required int sequence,
+                Value<bool> isImportant = const Value.absent(),
+                Value<bool> isPinned = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => MessageSummariesCompanion.insert(
                 id: id,
@@ -3579,8 +3799,11 @@ class $$MessageSummariesTableTableManager
                 preview: preview,
                 receivedAt: receivedAt,
                 isRead: isRead,
+                pendingReadState: pendingReadState,
                 hasAttachments: hasAttachments,
                 sequence: sequence,
+                isImportant: isImportant,
+                isPinned: isPinned,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

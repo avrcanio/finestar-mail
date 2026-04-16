@@ -87,9 +87,19 @@ void main() {
 
     expect(find.text('forward:${_firstMessage.id}:'), findsOneWidget);
   });
+
+  testWidgets('opening message detail marks selected message read', (
+    tester,
+  ) async {
+    final repository = _FakeMailboxRepository();
+    await tester.pumpWidget(_buildTestApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    expect(repository.markedReadMessageIds, contains(_secondMessage.id));
+  });
 }
 
-Widget _buildTestApp() {
+Widget _buildTestApp({_FakeMailboxRepository? repository}) {
   final router = GoRouter(
     initialLocation: AppRoute.messageDetail.path.replaceFirst(
       ':id',
@@ -124,7 +134,9 @@ Widget _buildTestApp() {
   return ProviderScope(
     overrides: [
       activeAccountProvider.overrideWith((ref) async => _account),
-      mailboxRepositoryProvider.overrideWith((ref) => _FakeMailboxRepository()),
+      mailboxRepositoryProvider.overrideWith(
+        (ref) => repository ?? _FakeMailboxRepository(),
+      ),
     ],
     child: MaterialApp.router(theme: buildAppTheme(), routerConfig: router),
   );
@@ -184,6 +196,8 @@ final _thread = MailThread(
 );
 
 class _FakeMailboxRepository implements MailboxRepository {
+  final markedReadMessageIds = <String>[];
+
   @override
   Future<List<MailFolder>> getFolders(String accountId) async => const [];
 
@@ -217,6 +231,42 @@ class _FakeMailboxRepository implements MailboxRepository {
     int pageSize = 20,
     bool forceRefresh = false,
   }) async => const [];
+
+  @override
+  Future<String?> findCachedMessageId({
+    required String accountId,
+    String? localMessageId,
+    String? folder,
+    String? uid,
+    String? rfcMessageId,
+    String? subject,
+    String? sender,
+  }) async => localMessageId;
+
+  @override
+  Future<void> setMessageRead({
+    required String accountId,
+    required String messageId,
+    required bool isRead,
+  }) async {
+    if (isRead) {
+      markedReadMessageIds.add(messageId);
+    }
+  }
+
+  @override
+  Future<void> setMessageImportant({
+    required String accountId,
+    required String messageId,
+    required bool isImportant,
+  }) async {}
+
+  @override
+  Future<void> setMessagePinned({
+    required String accountId,
+    required String messageId,
+    required bool isPinned,
+  }) async {}
 
   @override
   Future<List<MailMessageSummary>> searchMessages({

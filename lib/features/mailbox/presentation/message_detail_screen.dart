@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
 import '../../../core/widgets/state_views.dart';
 import '../../compose/domain/entities/reply_context.dart';
+import '../../auth/presentation/auth_controller.dart';
 import '../domain/entities/mail_thread.dart';
 import 'mailbox_controller.dart';
 
@@ -25,6 +27,7 @@ class MessageDetailScreen extends ConsumerStatefulWidget {
 class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   final _expandedMessageIds = <String>{};
   final _visibleQuotedMessageIds = <String>{};
+  final _markedReadMessageIds = <String>{};
   String? _initializedThreadMessageId;
 
   @override
@@ -49,6 +52,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
               child: threadAsync.when(
                 data: (thread) {
                   _ensureDefaultExpansion(thread);
+                  _markSelectedMessageRead(thread);
                   return _MessageThreadContent(
                     thread: thread,
                     expandedMessageIds: _expandedMessageIds,
@@ -93,6 +97,30 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
       _expandedMessageIds.add(thread.messages.last.id);
     }
     _visibleQuotedMessageIds.clear();
+  }
+
+  void _markSelectedMessageRead(MailThread thread) {
+    final messageId = thread.selectedMessageId;
+    if (!_markedReadMessageIds.add(messageId)) {
+      return;
+    }
+
+    Future.microtask(() async {
+      final account = await ref.read(activeAccountProvider.future);
+      if (account == null) {
+        return;
+      }
+      await ref
+          .read(mailboxRepositoryProvider)
+          .setMessageRead(
+            accountId: account.id,
+            messageId: messageId,
+            isRead: true,
+          );
+      if (mounted) {
+        ref.invalidate(folderMessagesProvider);
+      }
+    });
   }
 
   void _toggleExpanded(String messageId) {

@@ -1,0 +1,4 @@
+{
+  "apiBaseUrl": "https://mailadmin.finestar.hr",
+  "deviceRegistrationSecret": "replace-with-local-device-registration-secret"
+}

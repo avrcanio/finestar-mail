@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "876406474707",
+    "project_id": "fs-mail-5b774",
+    "storage_bucket": "fs-mail-5b774.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:876406474707:android:908c11278308dcaac75126",
+        "android_client_info": {
+          "package_name": "hr.finestar.mail"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAkOzGITeJZLgPqCzhDn16dQnL3FHs9sCM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

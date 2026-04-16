@@ -1,7 +1,7 @@
 import 'package:drift/drift.dart';
-import 'package:enough_mail/imap.dart';
 
 import '../../../data/local/app_database.dart' as db;
+import '../../../data/remote/backend_mail_api_client.dart';
 import '../../../data/secure/secure_storage_service.dart';
 import '../domain/entities/mail_folder.dart' as domain;
 import '../domain/entities/mail_message_detail.dart';
@@ -13,11 +13,14 @@ class MailboxRepositoryImpl implements MailboxRepository {
   MailboxRepositoryImpl({
     required db.AppDatabase appDatabase,
     SecureStorageService? secureStorageService,
+    BackendMailApiClient? backendMailApiClient,
   }) : _appDatabase = appDatabase,
-       _secureStorageService = secureStorageService;
+       _secureStorageService = secureStorageService,
+       _backendMailApiClient = backendMailApiClient;
 
   final db.AppDatabase _appDatabase;
   final SecureStorageService? _secureStorageService;
+  final BackendMailApiClient? _backendMailApiClient;
 
   static List<domain.MailFolder> _fallbackFolders(String accountId) => [
     domain.MailFolder(
@@ -70,7 +73,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
   @override
   Future<List<domain.MailFolder>> getFolders(String accountId) async {
-    final remoteFolders = await _fetchRemoteFolders(accountId);
+    final remoteFolders = await _fetchBackendFolders(accountId);
     if (remoteFolders != null && remoteFolders.isNotEmpty) {
       await _replaceCachedFolders(accountId, remoteFolders);
       return remoteFolders;
@@ -86,50 +89,26 @@ class MailboxRepositoryImpl implements MailboxRepository {
     return fallbackFolders;
   }
 
-  Future<List<domain.MailFolder>?> _fetchRemoteFolders(String accountId) async {
-    final secureStorageService = _secureStorageService;
-    if (secureStorageService == null) {
+  Future<List<domain.MailFolder>?> _fetchBackendFolders(
+    String accountId,
+  ) async {
+    final token = await _authToken(accountId);
+    if (token == null) {
       return null;
     }
 
-    final account = await (_appDatabase.select(
-      _appDatabase.accounts,
-    )..where((table) => table.id.equals(accountId))).getSingleOrNull();
-    final password = await secureStorageService.readPassword(accountId);
-    if (account == null || password == null || password.isEmpty) {
-      return null;
-    }
-
-    final client = ImapClient(isLogEnabled: false);
-    try {
-      await client.connectToServer(
-        account.imapHost,
-        account.imapPort,
-        isSecure: account.imapSecurity == 'sslTls',
-        timeout: const Duration(seconds: 12),
-      );
-      if (account.imapSecurity == 'startTls') {
-        await client.startTls();
-      }
-      await client.login(account.email, password);
-
-      final mailboxes = await client.listMailboxes(recursive: true);
-      return mailboxes
-          .where((mailbox) => !mailbox.isNotSelectable)
-          .map(
-            (mailbox) => domain.MailFolder(
-              id: _folderId(accountId, mailbox.path),
-              name: mailbox.name,
-              path: mailbox.path,
-              isInbox: _isInboxMailbox(mailbox),
-            ),
-          )
-          .toList();
-    } catch (_) {
-      return null;
-    } finally {
-      await client.disconnect();
-    }
+    final response = await _backendMailApiClient!.folders(token: token);
+    return response.folders
+        .where((folder) => folder.name.trim().isNotEmpty)
+        .map(
+          (folder) => domain.MailFolder(
+            id: _folderId(accountId, folder.name),
+            name: folder.name,
+            path: folder.name,
+            isInbox: _isInboxPath(folder.name),
+          ),
+        )
+        .toList();
   }
 
   Future<void> _replaceCachedFolders(
@@ -174,19 +153,6 @@ class MailboxRepositoryImpl implements MailboxRepository {
         .toList();
   }
 
-  String _folderId(String accountId, String path) {
-    final normalizedPath = path.trim().toLowerCase();
-    return '$accountId:$normalizedPath';
-  }
-
-  bool _isInboxMailbox(Mailbox mailbox) {
-    final normalizedPath = mailbox.path.trim().toLowerCase();
-    final normalizedName = mailbox.name.trim().toLowerCase();
-    return mailbox.isInbox ||
-        normalizedPath == 'inbox' ||
-        normalizedName == 'inbox';
-  }
-
   @override
   Future<List<MailMessageSummary>> getInbox({
     required String accountId,
@@ -196,7 +162,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
   }) async {
     final folders = await getFolders(accountId);
     final inbox = folders.firstWhere(
-      (folder) => folder.isInbox || folder.path.toLowerCase() == 'inbox',
+      (folder) => folder.isInbox || _isInboxPath(folder.path),
       orElse: () => _fallbackFolders(accountId).first,
     );
     return getMessages(
@@ -217,15 +183,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
     bool forceRefresh = false,
   }) async {
     if (forceRefresh) {
-      final remoteMessages = await _fetchRemoteMessages(
+      final remoteMessages = await _fetchBackendMessages(
         accountId: accountId,
         folder: folder,
         pageSize: pageSize,
       );
       if (remoteMessages != null) {
-        if (remoteMessages.isNotEmpty) {
-          return remoteMessages;
-        }
+        return remoteMessages;
       }
     }
 
@@ -240,7 +204,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
               ..limit(pageSize, offset: page * pageSize))
             .get();
 
-    if (cached.isEmpty && folder.isInbox) {
+    if (cached.isEmpty && folder.isInbox && _backendMailApiClient == null) {
       await _cacheSeedMessages(accountId);
       return getMessages(
         accountId: accountId,
@@ -250,7 +214,104 @@ class MailboxRepositoryImpl implements MailboxRepository {
       );
     }
 
-    return cached.map(_summaryFromRow).toList();
+    return _sortSummaries(cached.map(_summaryFromRow).toList());
+  }
+
+  Future<List<MailMessageSummary>?> _fetchBackendMessages({
+    required String accountId,
+    required domain.MailFolder folder,
+    required int pageSize,
+  }) async {
+    final token = await _authToken(accountId);
+    if (token == null) {
+      return null;
+    }
+
+    final response = await _backendMailApiClient!.messages(
+      token: token,
+      folder: folder.path,
+      limit: pageSize,
+    );
+    return _cacheBackendSummaries(accountId, folder, response.messages);
+  }
+
+  Future<List<MailMessageSummary>> _cacheBackendSummaries(
+    String accountId,
+    domain.MailFolder folder,
+    List<BackendMessageSummaryDto> messages,
+  ) async {
+    final summaries = messages.map((message) {
+      final folderPath = message.folder.isEmpty ? folder.path : message.folder;
+      final folderId = _folderId(accountId, folderPath);
+      return MailMessageSummary(
+        id: _messageId(accountId, folderPath, message.uid),
+        folderId: folderId,
+        subject: _subject(message.subject),
+        sender: _sender(message.sender),
+        preview: _preview(message.subject),
+        receivedAt: message.date ?? DateTime.now(),
+        isRead: _hasFlag(message.flags, 'seen'),
+        isImportant: _hasFlag(message.flags, 'flagged'),
+        hasAttachments: false,
+        sequence: int.tryParse(message.uid) ?? 0,
+      );
+    }).toList();
+
+    final existingRows = summaries.isEmpty
+        ? <db.MessageSummary>[]
+        : await (_appDatabase.select(
+            _appDatabase.messageSummaries,
+          )..where((table) => table.id.isIn(summaries.map((m) => m.id)))).get();
+    final existingById = {for (final row in existingRows) row.id: row};
+    final mergedSummaries = summaries.map((message) {
+      final existing = existingById[message.id];
+      if (existing == null) {
+        return message;
+      }
+      return MailMessageSummary(
+        id: message.id,
+        folderId: message.folderId,
+        subject: message.subject,
+        sender: message.sender,
+        preview: message.preview,
+        receivedAt: message.receivedAt,
+        isRead: existing.pendingReadState ?? message.isRead,
+        hasAttachments: message.hasAttachments,
+        sequence: message.sequence,
+        isImportant: message.isImportant || existing.isImportant,
+        isPinned: existing.isPinned,
+      );
+    }).toList();
+
+    await _appDatabase.batch((batch) {
+      batch.insertAllOnConflictUpdate(
+        _appDatabase.messageSummaries,
+        summaries.map((message) {
+          final existing = existingById[message.id];
+          return db.MessageSummariesCompanion.insert(
+            id: message.id,
+            accountId: Value(accountId),
+            folderId: message.folderId,
+            subject: message.subject,
+            sender: message.sender,
+            preview: message.preview,
+            receivedAt: message.receivedAt,
+            isRead: message.isRead,
+            pendingReadState: Value(
+              _nextPendingReadState(message, existingById),
+            ),
+            hasAttachments: message.hasAttachments,
+            sequence: message.sequence,
+            isImportant: Value(
+              message.isImportant || (existing?.isImportant ?? false),
+            ),
+            isPinned: Value(existing?.isPinned ?? false),
+          );
+        }).toList(),
+      );
+    });
+
+    return _sortSummaries(mergedSummaries);
   }
 
   @override
@@ -258,6 +319,14 @@ class MailboxRepositoryImpl implements MailboxRepository {
     required String accountId,
     required String id,
   }) async {
+    final remoteDetail = await _fetchBackendDetail(
+      accountId: accountId,
+      id: id,
+    );
+    if (remoteDetail != null) {
+      return remoteDetail;
+    }
+
     final cached =
         await (_appDatabase.select(_appDatabase.messageDetails)..where(
               (table) =>
@@ -266,36 +335,122 @@ class MailboxRepositoryImpl implements MailboxRepository {
             .getSingleOrNull();
 
     if (cached != null) {
-      return MailMessageDetail(
-        id: cached.id,
-        subject: cached.subject,
-        sender: cached.sender,
-        recipients: _splitRecipients(cached.recipients),
-        bodyPlain: cached.bodyPlain,
-        bodyHtml: cached.bodyHtml,
-        receivedAt: cached.receivedAt,
-      );
+      return _detailFromRow(cached);
     }
 
     final cachedFallback = await _cacheFallbackDetail(accountId, id);
-    return MailMessageDetail(
-      id: cachedFallback.id,
-      subject: cachedFallback.subject,
-      sender: cachedFallback.sender,
-      recipients: _splitRecipients(cachedFallback.recipients),
-      bodyPlain: cachedFallback.bodyPlain,
-      bodyHtml: cachedFallback.bodyHtml,
-      receivedAt: cachedFallback.receivedAt,
+    return _detailFromRow(cachedFallback);
+  }
+
+  Future<MailMessageDetail?> _fetchBackendDetail({
+    required String accountId,
+    required String id,
+  }) async {
+    final token = await _authToken(accountId);
+    final uid = _uidFromMessageId(id);
+    if (token == null || uid == null) {
+      return null;
+    }
+
+    final folderPath = await _folderPathForMessage(accountId, id);
+    final response = await _backendMailApiClient!.messageDetail(
+      token: token,
+      folder: folderPath,
+      uid: uid,
     );
+    final message = response.message;
+    final folder = message.folder.isEmpty ? folderPath : message.folder;
+    final folderId = _folderId(accountId, folder);
+    final messageId = _messageId(accountId, folder, message.uid);
+    final receivedAt = message.date ?? DateTime.now();
+    final detail = MailMessageDetail(
+      id: messageId,
+      subject: _subject(message.subject),
+      sender: _sender(message.sender),
+      recipients: [...message.to, ...message.cc],
+      bodyPlain: message.textBody,
+      bodyHtml: message.htmlBody.isEmpty ? null : message.htmlBody,
+      receivedAt: receivedAt,
+    );
+
+    await _appDatabase.batch((batch) {
+      batch.insert(
+        _appDatabase.mailFolders,
+        db.MailFoldersCompanion.insert(
+          id: folderId,
+          accountId: accountId,
+          name: folder,
+          path: folder,
+          isInbox: _isInboxPath(folder),
+        ),
+        mode: InsertMode.insertOrIgnore,
+      );
+      batch.insert(
+        _appDatabase.messageDetails,
+        db.MessageDetailsCompanion.insert(
+          id: messageId,
+          accountId: Value(accountId),
+          folderId: Value(folderId),
+          subject: detail.subject,
+          sender: detail.sender,
+          recipients: detail.recipients.join(','),
+          bodyPlain: detail.bodyPlain,
+          bodyHtml: Value(detail.bodyHtml),
+          receivedAt: detail.receivedAt,
+          messageIdHeader: Value(message.messageId),
+        ),
+        mode: InsertMode.insertOrReplace,
+      );
+      batch.insert(
+        _appDatabase.messageSummaries,
+        db.MessageSummariesCompanion.insert(
+          id: messageId,
+          accountId: Value(accountId),
+          folderId: folderId,
+          subject: detail.subject,
+          sender: detail.sender,
+          preview: _preview(detail.bodyPlain),
+          receivedAt: receivedAt,
+          isRead: _hasFlag(message.flags, 'seen'),
+          hasAttachments: message.attachments.isNotEmpty,
+          sequence: int.tryParse(message.uid) ?? 0,
+          isImportant: Value(_hasFlag(message.flags, 'flagged')),
+        ),
+        mode: InsertMode.insertOrReplace,
+      );
+    });
+
+    return detail;
   }
 
   Future<db.MessageDetail> _cacheFallbackDetail(
     String accountId,
     String id,
   ) async {
-    final summary = _seedMessages(
-      accountId,
-    ).firstWhere((message) => message.id == id);
+    final cachedSummary =
+        await (_appDatabase.select(_appDatabase.messageSummaries)..where(
+              (table) =>
+                  table.id.equals(id) & table.accountId.equals(accountId),
+            ))
+            .getSingleOrNull();
+    final summary = cachedSummary == null
+        ? _seedSummaryForId(accountId, id)
+        : MailMessageSummary(
+            id: cachedSummary.id,
+            folderId: cachedSummary.folderId,
+            subject: cachedSummary.subject,
+            sender: cachedSummary.sender,
+            preview: cachedSummary.preview,
+            receivedAt: cachedSummary.receivedAt,
+            isRead: cachedSummary.pendingReadState ?? cachedSummary.isRead,
+            hasAttachments: cachedSummary.hasAttachments,
+            sequence: cachedSummary.sequence,
+            isImportant: cachedSummary.isImportant,
+            isPinned: cachedSummary.isPinned,
+          );
+    if (summary == null) {
+      throw StateError('Message not found.');
+    }
     final detail = MailMessageDetail(
       id: summary.id,
       subject: summary.subject,
@@ -329,6 +484,15 @@ class MailboxRepositoryImpl implements MailboxRepository {
         .getSingle());
   }
 
+  MailMessageSummary? _seedSummaryForId(String accountId, String id) {
+    for (final message in _seedMessages(accountId)) {
+      if (message.id == id) {
+        return message;
+      }
+    }
+    return null;
+  }
+
   @override
   Future<MailThread> getMessageThread({
     required String accountId,
@@ -342,9 +506,18 @@ class MailboxRepositoryImpl implements MailboxRepository {
             ))
             .getSingleOrNull();
 
-    selected ??= await _cacheFallbackDetail(accountId, messageId);
+    if (selected == null) {
+      await _fetchBackendDetail(accountId: accountId, id: messageId);
+      selected =
+          await (_appDatabase.select(_appDatabase.messageDetails)..where(
+                (table) =>
+                    table.id.equals(messageId) &
+                    table.accountId.equals(accountId),
+              ))
+              .getSingleOrNull();
+    }
 
-    await _syncSentMessagesForThread(accountId, selected);
+    selected ??= await _cacheFallbackDetail(accountId, messageId);
 
     final allDetails = await (_appDatabase.select(
       _appDatabase.messageDetails,
@@ -354,14 +527,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
       for (final folder in folders) folder.id: _folderLabel(folder),
     };
 
-    final selectedMessage = selected;
-    final selectedTokens = _threadHeaderTokens(selectedMessage);
+    final selectedTokens = _threadHeaderTokens(selected);
     var threadRows = selectedTokens.isEmpty
         ? <db.MessageDetail>[]
         : allDetails
               .where(
                 (row) =>
-                    row.id == selectedMessage.id ||
+                    row.id == selected!.id ||
                     _threadHeaderTokens(
                       row,
                     ).any((token) => selectedTokens.contains(token)),
@@ -369,9 +541,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
               .toList();
 
     if (threadRows.length <= 1) {
-      final normalizedSubject = _normalizeThreadSubject(
-        selectedMessage.subject,
-      );
+      final normalizedSubject = _normalizeThreadSubject(selected.subject);
       threadRows = allDetails
           .where(
             (row) => _normalizeThreadSubject(row.subject) == normalizedSubject,
@@ -383,38 +553,154 @@ class MailboxRepositoryImpl implements MailboxRepository {
       (left, right) => left.receivedAt.compareTo(right.receivedAt),
     );
     return MailThread(
-      subject: selectedMessage.subject,
-      selectedMessageId: selectedMessage.id,
+      subject: selected.subject,
+      selectedMessageId: selected.id,
       messages: threadRows
           .map((row) => _threadMessageFromRow(row, folderNames))
           .toList(),
     );
   }
 
-  Future<void> _syncSentMessagesForThread(
-    String accountId,
-    db.MessageDetail selected,
-  ) async {
-    final secureStorageService = _secureStorageService;
-    if (secureStorageService == null) {
-      return;
+  @override
+  Future<String?> findCachedMessageId({
+    required String accountId,
+    String? localMessageId,
+    String? folder,
+    String? uid,
+    String? rfcMessageId,
+    String? subject,
+    String? sender,
+  }) async {
+    final trimmedLocalId = localMessageId?.trim();
+    if (trimmedLocalId != null && trimmedLocalId.isNotEmpty) {
+      final localMatch =
+          await (_appDatabase.select(_appDatabase.messageDetails)..where(
+                (table) =>
+                    table.accountId.equals(accountId) &
+                    table.id.equals(trimmedLocalId),
+              ))
+              .getSingleOrNull();
+      if (localMatch != null) {
+        return localMatch.id;
+      }
     }
 
-    final threadSubject = _normalizeThreadSubject(selected.subject);
-    if (threadSubject.isEmpty || threadSubject == '(no subject)') {
-      return;
+    final trimmedFolder = folder?.trim();
+    final trimmedUid = uid?.trim();
+    if (trimmedFolder != null &&
+        trimmedFolder.isNotEmpty &&
+        trimmedUid != null &&
+        trimmedUid.isNotEmpty) {
+      final backendMessageId = _messageId(accountId, trimmedFolder, trimmedUid);
+      final summaryMatch =
+          await (_appDatabase.select(_appDatabase.messageSummaries)..where(
+                (table) =>
+                    table.accountId.equals(accountId) &
+                    table.id.equals(backendMessageId),
+              ))
+              .getSingleOrNull();
+      if (summaryMatch != null) {
+        return summaryMatch.id;
+      }
+
+      final detailMatch =
+          await (_appDatabase.select(_appDatabase.messageDetails)..where(
+                (table) =>
+                    table.accountId.equals(accountId) &
+                    table.id.equals(backendMessageId),
+              ))
+              .getSingleOrNull();
+      if (detailMatch != null) {
+        return detailMatch.id;
+      }
     }
 
-    final folders = await getFolders(accountId);
-    final sentFolders = folders.where(_isSentFolder).toList();
-    for (final folder in sentFolders) {
-      await _searchRemoteMessages(
-        accountId: accountId,
-        folder: folder,
-        query: threadSubject,
-        limit: 30,
-      );
+    final rows = await (_appDatabase.select(
+      _appDatabase.messageDetails,
+    )..where((table) => table.accountId.equals(accountId))).get();
+
+    final rfcTokens = _messageIdTokens(rfcMessageId);
+    if (rfcTokens.isNotEmpty) {
+      for (final row in rows) {
+        if (_messageIdTokens(
+          row.messageIdHeader,
+        ).any((token) => rfcTokens.contains(token))) {
+          return row.id;
+        }
+      }
     }
+
+    final normalizedSubject = subject == null
+        ? null
+        : _normalizeThreadSubject(subject);
+    if (normalizedSubject == null ||
+        normalizedSubject.isEmpty ||
+        normalizedSubject == '(no subject)') {
+      return null;
+    }
+
+    final normalizedSender = _normalizeAddressish(sender);
+    final subjectMatches =
+        rows
+            .where(
+              (row) =>
+                  _normalizeThreadSubject(row.subject) == normalizedSubject,
+            )
+            .where((row) {
+              if (normalizedSender == null) {
+                return true;
+              }
+              final rowSender = _normalizeAddressish(row.sender);
+              return rowSender != null &&
+                  (rowSender.contains(normalizedSender) ||
+                      normalizedSender.contains(rowSender));
+            })
+            .toList()
+          ..sort((left, right) => right.receivedAt.compareTo(left.receivedAt));
+
+    return subjectMatches.isEmpty ? null : subjectMatches.first.id;
+  }
+
+  @override
+  Future<void> setMessageRead({
+    required String accountId,
+    required String messageId,
+    required bool isRead,
+  }) async {
+    await _updateCachedSummary(
+      accountId: accountId,
+      messageId: messageId,
+      companion: db.MessageSummariesCompanion(
+        isRead: Value(isRead),
+        pendingReadState: Value(isRead),
+      ),
+    );
+  }
+
+  @override
+  Future<void> setMessageImportant({
+    required String accountId,
+    required String messageId,
+    required bool isImportant,
+  }) async {
+    await _updateCachedSummary(
+      accountId: accountId,
+      messageId: messageId,
+      companion: db.MessageSummariesCompanion(isImportant: Value(isImportant)),
+    );
+  }
+
+  @override
+  Future<void> setMessagePinned({
+    required String accountId,
+    required String messageId,
+    required bool isPinned,
+  }) async {
+    await _updateCachedSummary(
+      accountId: accountId,
+      messageId: messageId,
+      companion: db.MessageSummariesCompanion(isPinned: Value(isPinned)),
+    );
   }
 
   @override
@@ -427,16 +713,6 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final normalizedQuery = query.trim();
     if (normalizedQuery.isEmpty) {
       return const [];
-    }
-
-    final remoteMessages = await _searchRemoteMessages(
-      accountId: accountId,
-      folder: folder,
-      query: normalizedQuery,
-      limit: limit,
-    );
-    if (remoteMessages != null) {
-      return remoteMessages;
     }
 
     final likeQuery = '%${normalizedQuery.toLowerCase()}%';
@@ -454,7 +730,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
               ..limit(limit))
             .get();
 
-    return cached.map(_summaryFromRow).toList();
+    return _sortSummaries(cached.map(_summaryFromRow).toList());
   }
 
   Future<void> _cacheSeedMessages(String accountId) async {
@@ -475,194 +751,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
                 isRead: message.isRead,
                 hasAttachments: message.hasAttachments,
                 sequence: message.sequence,
+                isImportant: Value(message.isImportant),
+                isPinned: Value(message.isPinned),
               ),
             )
             .toList(),
       );
     });
-  }
-
-  Future<List<MailMessageSummary>?> _searchRemoteMessages({
-    required String accountId,
-    required domain.MailFolder folder,
-    required String query,
-    required int limit,
-  }) async {
-    final secureStorageService = _secureStorageService;
-    if (secureStorageService == null) {
-      return null;
-    }
-
-    final account = await (_appDatabase.select(
-      _appDatabase.accounts,
-    )..where((table) => table.id.equals(accountId))).getSingleOrNull();
-    final password = await secureStorageService.readPassword(accountId);
-    if (account == null || password == null || password.isEmpty) {
-      return null;
-    }
-
-    final client = ImapClient(isLogEnabled: false);
-    try {
-      await client.connectToServer(
-        account.imapHost,
-        account.imapPort,
-        isSecure: account.imapSecurity == 'sslTls',
-        timeout: const Duration(seconds: 12),
-      );
-      if (account.imapSecurity == 'startTls') {
-        await client.startTls();
-      }
-      await client.login(account.email, password);
-      await client.selectMailboxByPath(folder.path);
-
-      var searchResult = await client.searchMessagesWithQuery(
-        SearchQueryBuilder.from(query, SearchQueryType.fromOrSubject),
-        responseTimeout: const Duration(seconds: 12),
-      );
-      var sequence = searchResult.matchingSequence;
-      if (sequence == null || sequence.isEmpty) {
-        searchResult = await client.searchMessagesWithQuery(
-          SearchQueryBuilder.from(query, SearchQueryType.body),
-          responseTimeout: const Duration(seconds: 12),
-        );
-        sequence = searchResult.matchingSequence;
-      }
-      if (sequence == null || sequence.isEmpty) {
-        return const [];
-      }
-
-      final ids = sequence.toList();
-      final limitedIds = ids.length > limit
-          ? ids.sublist(ids.length - limit)
-          : ids;
-      final fetchResult = await client.fetchMessages(
-        MessageSequence.fromIds(limitedIds),
-        '(FLAGS BODY.PEEK[])',
-        responseTimeout: const Duration(seconds: 20),
-      );
-
-      return _cacheMessages(accountId, folder, fetchResult.messages.reversed);
-    } catch (_) {
-      return null;
-    } finally {
-      await client.disconnect();
-    }
-  }
-
-  Future<List<MailMessageSummary>?> _fetchRemoteMessages({
-    required String accountId,
-    required domain.MailFolder folder,
-    required int pageSize,
-  }) async {
-    final secureStorageService = _secureStorageService;
-    if (secureStorageService == null) {
-      return null;
-    }
-
-    final account = await (_appDatabase.select(
-      _appDatabase.accounts,
-    )..where((table) => table.id.equals(accountId))).getSingleOrNull();
-    final password = await secureStorageService.readPassword(accountId);
-    if (account == null || password == null || password.isEmpty) {
-      return null;
-    }
-
-    final client = ImapClient(isLogEnabled: false);
-    try {
-      await client.connectToServer(
-        account.imapHost,
-        account.imapPort,
-        isSecure: account.imapSecurity == 'sslTls',
-        timeout: const Duration(seconds: 12),
-      );
-      if (account.imapSecurity == 'startTls') {
-        await client.startTls();
-      }
-      await client.login(account.email, password);
-      await client.selectMailboxByPath(folder.path);
-      final result = await client.fetchRecentMessages(
-        messageCount: pageSize,
-        criteria: '(FLAGS BODY.PEEK[])',
-        responseTimeout: const Duration(seconds: 20),
-      );
-
-      return _cacheMessages(accountId, folder, result.messages.reversed);
-    } catch (_) {
-      return null;
-    } finally {
-      await client.disconnect();
-    }
-  }
-
-  Future<List<MailMessageSummary>> _cacheMessages(
-    String accountId,
-    domain.MailFolder folder,
-    Iterable<MimeMessage> messages,
-  ) async {
-    final details = <db.MessageDetailsCompanion>[];
-    final summaries = messages.map((message) {
-      final messageId = _messageId(accountId, folder, message);
-      final bodyPlain = message.decodeTextPlainPart() ?? '';
-      final bodyHtml = message.decodeTextHtmlPart();
-      final receivedAt = message.decodeDate() ?? DateTime.now();
-      final sender = _sender(message);
-      final recipients = message.recipients.map((address) => address.email);
-      final subject = message.decodeSubject() ?? '(No subject)';
-
-      details.add(
-        db.MessageDetailsCompanion.insert(
-          id: messageId,
-          accountId: Value(accountId),
-          folderId: Value(folder.id),
-          subject: subject,
-          sender: sender,
-          recipients: recipients.join(','),
-          bodyPlain: bodyPlain,
-          bodyHtml: Value(bodyHtml),
-          receivedAt: receivedAt,
-          messageIdHeader: Value(message.getHeaderValue('Message-ID')),
-          inReplyToHeader: Value(message.getHeaderValue('In-Reply-To')),
-          referencesHeader: Value(message.getHeaderValue('References')),
-        ),
-      );
-
-      return MailMessageSummary(
-        id: messageId,
-        folderId: folder.id,
-        subject: subject,
-        sender: sender,
-        preview: _preview(bodyPlain),
-        receivedAt: receivedAt,
-        isRead: message.isSeen,
-        hasAttachments: message.hasAttachments(),
-        sequence: message.sequenceId ?? message.uid ?? 0,
-      );
-    }).toList();
-
-    await _appDatabase.batch((batch) {
-      batch.insertAllOnConflictUpdate(_appDatabase.messageDetails, details);
-      batch.insertAllOnConflictUpdate(
-        _appDatabase.messageSummaries,
-        summaries
-            .map(
-              (message) => db.MessageSummariesCompanion.insert(
-                id: message.id,
-                accountId: Value(accountId),
-                folderId: message.folderId,
-                subject: message.subject,
-                sender: message.sender,
-                preview: message.preview,
-                receivedAt: message.receivedAt,
-                isRead: message.isRead,
-                hasAttachments: message.hasAttachments,
-                sequence: message.sequence,
-              ),
-            )
-            .toList(),
-      );
-    });
-
-    return summaries;
   }
 
   MailMessageSummary _summaryFromRow(db.MessageSummary row) {
@@ -673,9 +768,60 @@ class MailboxRepositoryImpl implements MailboxRepository {
       sender: row.sender,
       preview: row.preview,
       receivedAt: row.receivedAt,
-      isRead: row.isRead,
+      isRead: row.pendingReadState ?? row.isRead,
       hasAttachments: row.hasAttachments,
       sequence: row.sequence,
+      isImportant: row.isImportant,
+      isPinned: row.isPinned,
+    );
+  }
+
+  List<MailMessageSummary> _sortSummaries(List<MailMessageSummary> messages) {
+    final sorted = [...messages];
+    sorted.sort((left, right) {
+      final pinnedComparison = (right.isPinned ? 1 : 0).compareTo(
+        left.isPinned ? 1 : 0,
+      );
+      if (pinnedComparison != 0) {
+        return pinnedComparison;
+      }
+      return right.receivedAt.compareTo(left.receivedAt);
+    });
+    return sorted;
+  }
+
+  bool? _nextPendingReadState(
+    MailMessageSummary message,
+    Map<String, db.MessageSummary> existingById,
+  ) {
+    final pending = existingById[message.id]?.pendingReadState;
+    if (pending == null || pending == message.isRead) {
+      return null;
+    }
+    return pending;
+  }
+
+  Future<void> _updateCachedSummary({
+    required String accountId,
+    required String messageId,
+    required db.MessageSummariesCompanion companion,
+  }) async {
+    await (_appDatabase.update(_appDatabase.messageSummaries)..where(
+          (table) =>
+              table.accountId.equals(accountId) & table.id.equals(messageId),
+        ))
+        .write(companion);
+  }
+
+  MailMessageDetail _detailFromRow(db.MessageDetail row) {
+    return MailMessageDetail(
+      id: row.id,
+      subject: row.subject,
+      sender: row.sender,
+      recipients: _splitRecipients(row.recipients),
+      bodyPlain: row.bodyPlain,
+      bodyHtml: row.bodyHtml,
+      receivedAt: row.receivedAt,
     );
   }
 
@@ -698,6 +844,103 @@ class MailboxRepositoryImpl implements MailboxRepository {
       inReplyToHeader: row.inReplyToHeader,
       referencesHeader: row.referencesHeader,
     );
+  }
+
+  Future<String?> _authToken(String accountId) async {
+    final client = _backendMailApiClient;
+    final storage = _secureStorageService;
+    if (client == null || storage == null) {
+      return null;
+    }
+    final token = await storage.readAuthToken(accountId);
+    if (token == null || token.trim().isEmpty) {
+      return null;
+    }
+    return token;
+  }
+
+  Future<String> _folderPathForMessage(String accountId, String id) async {
+    final summary =
+        await (_appDatabase.select(_appDatabase.messageSummaries)..where(
+              (table) =>
+                  table.id.equals(id) & table.accountId.equals(accountId),
+            ))
+            .getSingleOrNull();
+    if (summary != null) {
+      final folder =
+          await (_appDatabase.select(_appDatabase.mailFolders)..where(
+                (table) =>
+                    table.id.equals(summary.folderId) &
+                    table.accountId.equals(accountId),
+              ))
+              .getSingleOrNull();
+      if (folder != null) {
+        return folder.path;
+      }
+    }
+    return _folderSlugFromMessageId(accountId, id) ?? 'INBOX';
+  }
+
+  String _folderId(String accountId, String path) {
+    final normalizedPath = path.trim().toLowerCase();
+    return '$accountId:$normalizedPath';
+  }
+
+  String _messageId(String accountId, String folderPath, String uid) {
+    final normalizedPath = folderPath.trim().toLowerCase();
+    return '$accountId:$normalizedPath:api:$uid';
+  }
+
+  String? _uidFromMessageId(String messageId) {
+    const marker = ':api:';
+    final markerIndex = messageId.lastIndexOf(marker);
+    if (markerIndex == -1) {
+      return null;
+    }
+    final uid = messageId.substring(markerIndex + marker.length).trim();
+    return uid.isEmpty ? null : uid;
+  }
+
+  String? _folderSlugFromMessageId(String accountId, String messageId) {
+    const marker = ':api:';
+    final prefix = '$accountId:';
+    if (!messageId.startsWith(prefix)) {
+      return null;
+    }
+    final markerIndex = messageId.lastIndexOf(marker);
+    if (markerIndex == -1) {
+      return null;
+    }
+    final folder = messageId.substring(prefix.length, markerIndex).trim();
+    return folder.isEmpty ? null : folder;
+  }
+
+  bool _isInboxPath(String path) => path.trim().toLowerCase() == 'inbox';
+
+  bool _hasFlag(List<String> flags, String flag) {
+    return flags.any((value) => value.toLowerCase() == flag.toLowerCase());
+  }
+
+  String _subject(String subject) {
+    final trimmed = subject.trim();
+    return trimmed.isEmpty ? '(No subject)' : trimmed;
+  }
+
+  String _sender(String sender) {
+    final trimmed = sender.trim();
+    return trimmed.isEmpty ? 'unknown sender' : trimmed;
+  }
+
+  String _preview(String body) {
+    final collapsed = body.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (collapsed.length <= 140) {
+      return collapsed;
+    }
+    return '${collapsed.substring(0, 140)}...';
+  }
+
+  String _folderLabel(domain.MailFolder folder) {
+    return folder.name.trim().isEmpty ? folder.path : folder.name;
   }
 
   Set<String> _threadHeaderTokens(db.MessageDetail row) {
@@ -741,45 +984,15 @@ class MailboxRepositoryImpl implements MailboxRepository {
         .toList();
   }
 
-  String _folderLabel(domain.MailFolder folder) {
-    return folder.name.trim().isEmpty ? folder.path : folder.name;
-  }
-
-  bool _isSentFolder(domain.MailFolder folder) {
-    final normalizedPath = folder.path.trim().toLowerCase();
-    final normalizedName = folder.name.trim().toLowerCase();
-    return normalizedPath == 'sent' ||
-        normalizedName == 'sent' ||
-        normalizedPath.contains('sent mail') ||
-        normalizedName.contains('sent mail') ||
-        normalizedPath.contains('/sent') ||
-        normalizedName.contains('poslano') ||
-        normalizedPath.contains('poslano');
-  }
-
-  String _messageId(
-    String accountId,
-    domain.MailFolder folder,
-    MimeMessage message,
-  ) {
-    final remoteId = message.uid ?? message.sequenceId ?? message.guid;
-    final normalizedPath = folder.path.trim().toLowerCase();
-    return '$accountId:$normalizedPath:imap:${remoteId ?? message.hashCode}';
-  }
-
-  String _sender(MimeMessage message) {
-    final from = message.from;
-    if (from != null && from.isNotEmpty) {
-      return from.first.email;
+  String? _normalizeAddressish(String? value) {
+    final trimmed = value?.trim().toLowerCase();
+    if (trimmed == null || trimmed.isEmpty) {
+      return null;
     }
-    return message.fromEmail ?? 'unknown sender';
-  }
-
-  String _preview(String body) {
-    final collapsed = body.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (collapsed.length <= 140) {
-      return collapsed;
-    }
-    return '${collapsed.substring(0, 140)}...';
+    final emailMatch = RegExp(
+      r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+",
+      caseSensitive: false,
+    ).firstMatch(trimmed);
+    return emailMatch?.group(0)?.toLowerCase() ?? trimmed;
   }
 }

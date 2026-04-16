@@ -31,6 +31,34 @@ abstract class MailboxRepository {
     required String messageId,
   });
 
+  Future<String?> findCachedMessageId({
+    required String accountId,
+    String? localMessageId,
+    String? folder,
+    String? uid,
+    String? rfcMessageId,
+    String? subject,
+    String? sender,
+  });
+
+  Future<void> setMessageRead({
+    required String accountId,
+    required String messageId,
+    required bool isRead,
+  });
+
+  Future<void> setMessageImportant({
+    required String accountId,
+    required String messageId,
+    required bool isImportant,
+  });
+
+  Future<void> setMessagePinned({
+    required String accountId,
+    required String messageId,
+    required bool isPinned,
+  });
+
   Future<List<MailMessageSummary>> searchMessages({
     required String accountId,
     required MailFolder folder,

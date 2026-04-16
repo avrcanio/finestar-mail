@@ -43,8 +43,11 @@ class MessageSummaries extends Table {
   TextColumn get preview => text()();
   DateTimeColumn get receivedAt => dateTime()();
   BoolColumn get isRead => boolean()();
+  BoolColumn get pendingReadState => boolean().nullable()();
   BoolColumn get hasAttachments => boolean()();
   IntColumn get sequence => integer()();
+  BoolColumn get isImportant => boolean().withDefault(const Constant(false))();
+  BoolColumn get isPinned => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column<Object>> get primaryKey => {id};
@@ -104,7 +107,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -131,6 +134,19 @@ class AppDatabase extends _$AppDatabase {
         await migrator.addColumn(
           messageDetails,
           messageDetails.referencesHeader,
+        );
+      }
+      if (from < 4) {
+        await migrator.addColumn(
+          messageSummaries,
+          messageSummaries.isImportant,
+        );
+        await migrator.addColumn(messageSummaries, messageSummaries.isPinned);
+      }
+      if (from < 5) {
+        await migrator.addColumn(
+          messageSummaries,
+          messageSummaries.pendingReadState,
         );
       }
     },

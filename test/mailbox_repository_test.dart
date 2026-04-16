@@ -260,6 +260,283 @@ void main() {
 
     expect(thread.messages.map((message) => message.id), ['first-message']);
   });
+
+  test('notification lookup maps RFC Message-ID to cached local id', () async {
+    final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    await _insertDetail(
+      database,
+      id: 'local-inbox-id',
+      accountId: 'account',
+      folderId: 'account:inbox',
+      subject: 'Incoming push',
+      sender: 'sender@finestar.hr',
+      recipients: 'me@finestar.hr',
+      receivedAt: DateTime(2026, 4, 16, 11),
+      messageIdHeader: '<server-message@finestar.hr>',
+    );
+
+    final repository = MailboxRepositoryImpl(appDatabase: database);
+    final localId = await repository.findCachedMessageId(
+      accountId: 'account',
+      rfcMessageId: '<server-message@finestar.hr>',
+      subject: 'Incoming push',
+      sender: 'Sender <sender@finestar.hr>',
+    );
+
+    expect(localId, 'local-inbox-id');
+  });
+
+  test(
+    'notification lookup maps backend folder and uid to cached id',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(database.close);
+
+      await _insertSummary(
+        database,
+        id: 'account:inbox:api:42',
+        accountId: 'account',
+        folderId: 'account:inbox',
+        subject: 'Backend push',
+      );
+
+      final repository = MailboxRepositoryImpl(appDatabase: database);
+      final localId = await repository.findCachedMessageId(
+        accountId: 'account',
+        folder: 'INBOX',
+        uid: '42',
+      );
+
+      expect(localId, 'account:inbox:api:42');
+    },
+  );
+
+  test(
+    'thread loading can open a cached backend summary without detail',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(database.close);
+
+      await _insertSummary(
+        database,
+        id: 'account:inbox:api:42',
+        accountId: 'account',
+        folderId: 'account:inbox',
+        subject: 'Backend push',
+      );
+
+      final repository = MailboxRepositoryImpl(appDatabase: database);
+      final thread = await repository.getMessageThread(
+        accountId: 'account',
+        messageId: 'account:inbox:api:42',
+      );
+
+      expect(thread.selectedMessageId, 'account:inbox:api:42');
+      expect(thread.messages.single.subject, 'Backend push');
+    },
+  );
+
+  test(
+    'notification lookup falls back to newest subject and sender match',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(database.close);
+
+      await _insertDetail(
+        database,
+        id: 'older',
+        accountId: 'account',
+        folderId: 'account:inbox',
+        subject: 'Re: Push subject',
+        sender: 'sender@finestar.hr',
+        recipients: 'me@finestar.hr',
+        receivedAt: DateTime(2026, 4, 16, 8),
+      );
+      await _insertDetail(
+        database,
+        id: 'newer',
+        accountId: 'account',
+        folderId: 'account:inbox',
+        subject: 'Push subject',
+        sender: 'sender@finestar.hr',
+        recipients: 'me@finestar.hr',
+        receivedAt: DateTime(2026, 4, 16, 11),
+      );
+
+      final repository = MailboxRepositoryImpl(appDatabase: database);
+      final localId = await repository.findCachedMessageId(
+        accountId: 'account',
+        subject: 'Push subject',
+        sender: 'Sender <sender@finestar.hr>',
+      );
+
+      expect(localId, 'newer');
+    },
+  );
+
+  test(
+    'setMessageRead marks read locally and stores pending server sync',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(database.close);
+
+      await _insertSummary(
+        database,
+        id: 'account:inbox:imap:1',
+        accountId: 'account',
+        folderId: 'account:inbox',
+        subject: 'Unread',
+        isRead: false,
+      );
+
+      final repository = MailboxRepositoryImpl(appDatabase: database);
+      await repository.setMessageRead(
+        accountId: 'account',
+        messageId: 'account:inbox:imap:1',
+        isRead: true,
+      );
+
+      final row = await (database.select(
+        database.messageSummaries,
+      )..where((table) => table.id.equals('account:inbox:imap:1'))).getSingle();
+      expect(row.isRead, isTrue);
+      expect(row.pendingReadState, isTrue);
+    },
+  );
+
+  test(
+    'setMessageRead marks unread locally and stores pending server sync',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(database.close);
+
+      await _insertSummary(
+        database,
+        id: 'account:inbox:imap:1',
+        accountId: 'account',
+        folderId: 'account:inbox',
+        subject: 'Read',
+        isRead: true,
+      );
+
+      final repository = MailboxRepositoryImpl(appDatabase: database);
+      await repository.setMessageRead(
+        accountId: 'account',
+        messageId: 'account:inbox:imap:1',
+        isRead: false,
+      );
+
+      final row = await (database.select(
+        database.messageSummaries,
+      )..where((table) => table.id.equals('account:inbox:imap:1'))).getSingle();
+      expect(row.isRead, isFalse);
+      expect(row.pendingReadState, isFalse);
+    },
+  );
+
+  test('pending unread state overrides cached server read state', () async {
+    final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    const inbox = MailFolder(
+      id: 'account:inbox',
+      name: 'INBOX',
+      path: 'INBOX',
+      isInbox: true,
+    );
+    await _insertSummary(
+      database,
+      id: 'account:inbox:imap:1',
+      accountId: 'account',
+      folderId: inbox.id,
+      subject: 'Pending unread',
+      isRead: true,
+      pendingReadState: false,
+    );
+
+    final repository = MailboxRepositoryImpl(appDatabase: database);
+    final messages = await repository.getMessages(
+      accountId: 'account',
+      folder: inbox,
+    );
+
+    expect(messages.single.isRead, isFalse);
+  });
+
+  test(
+    'important and pinned states persist across cached message reads',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(database.close);
+
+      const inbox = MailFolder(
+        id: 'account:inbox',
+        name: 'INBOX',
+        path: 'INBOX',
+        isInbox: true,
+      );
+      await _insertSummary(
+        database,
+        id: 'account:inbox:imap:1',
+        accountId: 'account',
+        folderId: inbox.id,
+        subject: 'Status',
+        isImportant: true,
+        isPinned: true,
+      );
+
+      final repository = MailboxRepositoryImpl(appDatabase: database);
+      final messages = await repository.getMessages(
+        accountId: 'account',
+        folder: inbox,
+      );
+
+      expect(messages.single.isImportant, isTrue);
+      expect(messages.single.isPinned, isTrue);
+    },
+  );
+
+  test('pinned messages sort above newer unpinned messages', () async {
+    final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    const inbox = MailFolder(
+      id: 'account:inbox',
+      name: 'INBOX',
+      path: 'INBOX',
+      isInbox: true,
+    );
+    await _insertSummary(
+      database,
+      id: 'account:inbox:imap:1',
+      accountId: 'account',
+      folderId: inbox.id,
+      subject: 'Older pinned',
+      receivedAt: DateTime(2026, 4, 16, 8),
+      isPinned: true,
+    );
+    await _insertSummary(
+      database,
+      id: 'account:inbox:imap:2',
+      accountId: 'account',
+      folderId: inbox.id,
+      subject: 'Newer unpinned',
+      receivedAt: DateTime(2026, 4, 16, 10),
+    );
+
+    final repository = MailboxRepositoryImpl(appDatabase: database);
+    final messages = await repository.getMessages(
+      accountId: 'account',
+      folder: inbox,
+    );
+
+    expect(messages.map((message) => message.subject), [
+      'Older pinned',
+      'Newer unpinned',
+    ]);
+  });
 }
 
 Future<void> _insertFolder(
@@ -311,6 +588,39 @@ Future<void> _insertDetail(
           messageIdHeader: Value(messageIdHeader),
           inReplyToHeader: Value(inReplyToHeader),
           referencesHeader: Value(referencesHeader),
+        ),
+      );
+}
+
+Future<void> _insertSummary(
+  db.AppDatabase database, {
+  required String id,
+  required String accountId,
+  required String folderId,
+  required String subject,
+  DateTime? receivedAt,
+  bool isRead = true,
+  bool? pendingReadState,
+  bool isImportant = false,
+  bool isPinned = false,
+}) {
+  return database
+      .into(database.messageSummaries)
+      .insert(
+        db.MessageSummariesCompanion.insert(
+          id: id,
+          accountId: Value(accountId),
+          folderId: folderId,
+          subject: subject,
+          sender: 'sender@finestar.hr',
+          preview: 'Preview',
+          receivedAt: receivedAt ?? DateTime(2026, 4, 16),
+          isRead: isRead,
+          pendingReadState: Value(pendingReadState),
+          hasAttachments: false,
+          sequence: 1,
+          isImportant: Value(isImportant),
+          isPinned: Value(isPinned),
         ),
       );
 }

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
 import '../../auth/domain/entities/mail_account.dart';
 import '../../auth/presentation/auth_controller.dart';
@@ -182,17 +183,20 @@ class _GmailSearchBar extends StatelessWidget {
               ),
             Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: InkWell(
-                customBorder: const CircleBorder(),
-                onTap: onAvatarPressed,
-                child: CircleAvatar(
-                  radius: 18,
-                  backgroundColor: Theme.of(context).colorScheme.primary,
-                  child: Text(
-                    initials,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
+              child: Tooltip(
+                message: 'Manage account',
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: onAvatarPressed,
+                  child: CircleAvatar(
+                    radius: 18,
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    child: Text(
+                      initials,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ),
@@ -364,7 +368,7 @@ class _MailboxContent extends ConsumerWidget {
                 );
               }
 
-              return _MessageList(messages: messages);
+              return _MessageList(messages: messages, folder: folder);
             },
             error: (error, stackTrace) => ErrorStateView(
               message: error.toString(),
@@ -380,13 +384,14 @@ class _MailboxContent extends ConsumerWidget {
   }
 }
 
-class _MessageList extends StatelessWidget {
-  const _MessageList({required this.messages});
+class _MessageList extends ConsumerWidget {
+  const _MessageList({required this.messages, required this.folder});
 
   final List<MailMessageSummary> messages;
+  final MailFolder folder;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final formatter = DateFormat('MMM d');
 
     return Column(
@@ -395,8 +400,14 @@ class _MessageList extends StatelessWidget {
             (message) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: SectionCard(
+                color: message.isRead ? Colors.white : const Color(0xFFEAF4FF),
                 padding: const EdgeInsets.all(0),
                 child: ListTile(
+                  onLongPress: () => _showMessageActions(
+                    context: context,
+                    ref: ref,
+                    message: message,
+                  ),
                   onTap: () => context.push(
                     AppRoute.messageDetail.path.replaceFirst(':id', message.id),
                   ),
@@ -437,11 +448,32 @@ class _MessageList extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(formatter.format(message.receivedAt)),
-                      if (message.hasAttachments)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 6),
-                          child: Icon(Icons.attach_file, size: 16),
-                        ),
+                      const SizedBox(height: 6),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (message.isImportant)
+                            const Icon(
+                              Icons.error,
+                              size: 16,
+                              color: Color(0xFFD93025),
+                            ),
+                          if (message.isPinned)
+                            const Padding(
+                              padding: EdgeInsets.only(left: 4),
+                              child: Icon(
+                                Icons.push_pin,
+                                size: 16,
+                                color: Color(0xFF153B52),
+                              ),
+                            ),
+                          if (message.hasAttachments)
+                            const Padding(
+                              padding: EdgeInsets.only(left: 4),
+                              child: Icon(Icons.attach_file, size: 16),
+                            ),
+                        ],
+                      ),
                     ],
                   ),
                   isThreeLine: true,
@@ -450,6 +482,82 @@ class _MessageList extends StatelessWidget {
             ),
           )
           .toList(),
+    );
+  }
+
+  Future<void> _showMessageActions({
+    required BuildContext context,
+    required WidgetRef ref,
+    required MailMessageSummary message,
+  }) async {
+    final account = ref.read(activeAccountProvider).asData?.value;
+    if (account == null) {
+      return;
+    }
+
+    Future<void> apply(Future<void> Function() action) async {
+      Navigator.of(context).pop();
+      await action();
+      ref.invalidate(folderMessagesProvider(folder));
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: Icon(
+                  message.isRead
+                      ? Icons.mark_email_unread_outlined
+                      : Icons.mark_email_read_outlined,
+                ),
+                title: Text(message.isRead ? 'Mark as unread' : 'Mark as read'),
+                onTap: () => apply(
+                  () => ref
+                      .read(mailboxRepositoryProvider)
+                      .setMessageRead(
+                        accountId: account.id,
+                        messageId: message.id,
+                        isRead: !message.isRead,
+                      ),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.error_outline),
+                title: Text(
+                  message.isImportant ? 'Remove important' : 'Mark important',
+                ),
+                onTap: () => apply(
+                  () => ref
+                      .read(mailboxRepositoryProvider)
+                      .setMessageImportant(
+                        accountId: account.id,
+                        messageId: message.id,
+                        isImportant: !message.isImportant,
+                      ),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.push_pin_outlined),
+                title: Text(message.isPinned ? 'Unpin' : 'Pin to top'),
+                onTap: () => apply(
+                  () => ref
+                      .read(mailboxRepositoryProvider)
+                      .setMessagePinned(
+                        accountId: account.id,
+                        messageId: message.id,
+                        isPinned: !message.isPinned,
+                      ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
