@@ -17,6 +17,8 @@ class MailThreadMessage {
     required this.id,
     required this.folderId,
     required this.folderName,
+    this.folderPath = '',
+    this.backendUid,
     required this.subject,
     required this.sender,
     required this.recipients,
@@ -32,6 +34,8 @@ class MailThreadMessage {
   final String id;
   final String folderId;
   final String folderName;
+  final String folderPath;
+  final String? backendUid;
   final String subject;
   final String sender;
   final List<String> recipients;

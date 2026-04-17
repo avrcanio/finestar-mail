@@ -404,6 +404,12 @@ class BackendMailApiException implements Exception {
     if (currentCode == 'invalid_attachment_payload') {
       return 'The attachment payload was invalid.';
     }
+    if (currentCode == 'forward_attachment_not_visible') {
+      return 'One forwarded attachment cannot be sent.';
+    }
+    if (currentCode == 'forward_attachment_not_found') {
+      return 'One forwarded attachment could not be found.';
+    }
     if (currentCode == 'mail_timeout') {
       return 'The mail server timed out. Try again.';
     }
@@ -679,6 +685,7 @@ class BackendAttachmentDto {
     required this.disposition,
     required this.isInline,
     required this.contentId,
+    required this.isVisible,
   });
 
   final String id;
@@ -688,6 +695,7 @@ class BackendAttachmentDto {
   final String? disposition;
   final bool isInline;
   final String contentId;
+  final bool? isVisible;
 
   factory BackendAttachmentDto.fromJson(Map<String, dynamic> json) {
     return BackendAttachmentDto(
@@ -698,6 +706,9 @@ class BackendAttachmentDto {
       disposition: json['disposition'] as String?,
       isInline: json['is_inline'] as bool? ?? false,
       contentId: json['content_id'] as String? ?? '',
+      isVisible: json.containsKey('is_visible')
+          ? json['is_visible'] as bool? ?? false
+          : null,
     );
   }
 }
@@ -724,6 +735,7 @@ class BackendSendRequest {
     required this.htmlBody,
     required this.replyTo,
     required this.fromDisplayName,
+    this.forwardSourceMessage,
   });
 
   final List<String> to;
@@ -734,6 +746,7 @@ class BackendSendRequest {
   final String htmlBody;
   final String? replyTo;
   final String fromDisplayName;
+  final BackendForwardSourceMessage? forwardSourceMessage;
 
   Map<String, dynamic> toJson() => {
     'to': to,
@@ -744,6 +757,8 @@ class BackendSendRequest {
     'html_body': htmlBody,
     'reply_to': replyTo,
     'from_display_name': fromDisplayName,
+    if (forwardSourceMessage != null)
+      'forward_source_message': forwardSourceMessage!.toJson(),
   };
 
   Map<String, String> toMultipartScalarFields() => {
@@ -751,6 +766,26 @@ class BackendSendRequest {
     'text_body': textBody,
     'html_body': htmlBody,
     'from_display_name': fromDisplayName,
+    if (forwardSourceMessage != null)
+      'forward_source_message': jsonEncode(forwardSourceMessage!.toJson()),
+  };
+}
+
+class BackendForwardSourceMessage {
+  const BackendForwardSourceMessage({
+    required this.folder,
+    required this.uid,
+    required this.attachmentIds,
+  });
+
+  final String folder;
+  final String uid;
+  final List<String> attachmentIds;
+
+  Map<String, dynamic> toJson() => {
+    'folder': folder,
+    'uid': uid,
+    'attachment_ids': attachmentIds,
   };
 }
 

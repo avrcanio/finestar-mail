@@ -313,6 +313,9 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
     required MailThreadMessage message,
     required ReplyAction action,
   }) {
+    final visibleAttachments = action == ReplyAction.forward
+        ? _visibleAttachmentChips(message)
+        : const <MailMessageAttachment>[];
     context.push(
       AppRoute.compose.path,
       extra: ReplyContext(
@@ -329,6 +332,21 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
         originalBody: message.visibleBody,
         originalMessageIdHeader: message.messageIdHeader,
         originalReferencesHeader: message.referencesHeader,
+        forwardSourceFolder: action == ReplyAction.forward
+            ? message.folderPath
+            : null,
+        forwardSourceUid: action == ReplyAction.forward
+            ? message.backendUid
+            : null,
+        forwardedAttachments: [
+          for (final attachment in visibleAttachments)
+            ForwardedAttachmentRef(
+              attachmentId: attachment.id,
+              fileName: attachment.filename,
+              sizeBytes: attachment.sizeBytes,
+              mimeType: attachment.contentType,
+            ),
+        ],
       ),
     );
   }

@@ -127,7 +127,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.text('reply:${_secondMessage.id}:${_secondMessage.sender}'),
+      find.text('reply:${_secondMessage.id}:${_secondMessage.sender}:::'),
       findsOneWidget,
     );
 
@@ -137,7 +137,10 @@ void main() {
     await tester.tap(find.byTooltip('Forward').first);
     await tester.pumpAndSettle();
 
-    expect(find.text('forward:${_firstMessage.id}:'), findsOneWidget);
+    expect(
+      find.text('forward:${_firstMessage.id}::INBOX:42:pdf_1'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('opening message detail marks selected message read', (
@@ -623,7 +626,11 @@ Widget _buildTestApp({
           return Scaffold(
             appBar: AppBar(leading: BackButton(onPressed: () => context.pop())),
             body: Text(
-              '${replyContext.action.name}:${replyContext.targetMessageId}:${replyContext.recipients.join(',')}',
+              '${replyContext.action.name}:${replyContext.targetMessageId}:'
+              '${replyContext.recipients.join(',')}:'
+              '${replyContext.forwardSourceFolder ?? ''}:'
+              '${replyContext.forwardSourceUid ?? ''}:'
+              '${replyContext.forwardedAttachments.map((attachment) => attachment.attachmentId).join(',')}',
             ),
           );
         },
@@ -666,6 +673,8 @@ final _firstMessage = MailThreadMessage(
   id: 'message-1',
   folderId: 'avrcan@finestar.hr:inbox',
   folderName: 'INBOX',
+  folderPath: 'INBOX',
+  backendUid: '42',
   subject: 'probni mail',
   sender: 'ante@vitalgroupsa.com',
   recipients: const ['avrcan@finestar.hr'],
@@ -676,6 +685,27 @@ final _firstMessage = MailThreadMessage(
   messageIdHeader: '<message-1@finestar.hr>',
   inReplyToHeader: null,
   referencesHeader: null,
+  attachments: const [
+    MailMessageAttachment(
+      id: 'pdf_1',
+      filename: 'notice.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 10,
+      disposition: 'attachment',
+      isInline: false,
+      isVisible: true,
+    ),
+    MailMessageAttachment(
+      id: 'img_1',
+      filename: 'image001.jpg',
+      contentType: 'image/jpeg',
+      sizeBytes: 3,
+      disposition: null,
+      isInline: false,
+      contentId: 'image001@example.test',
+      isVisible: false,
+    ),
+  ],
 );
 
 final _secondMessage = MailThreadMessage(

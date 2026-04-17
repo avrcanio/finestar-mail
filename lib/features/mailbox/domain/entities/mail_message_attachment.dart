@@ -7,6 +7,7 @@ class MailMessageAttachment {
     required this.disposition,
     required this.isInline,
     this.contentId = '',
+    this.isVisible,
   });
 
   final String id;
@@ -16,6 +17,7 @@ class MailMessageAttachment {
   final String? disposition;
   final bool isInline;
   final String contentId;
+  final bool? isVisible;
 }
 
 class DownloadedMailAttachment {

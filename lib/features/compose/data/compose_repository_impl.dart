@@ -73,6 +73,13 @@ class ComposeRepositoryImpl implements ComposeRepository {
           htmlBody: '',
           replyTo: null,
           fromDisplayName: account.displayName,
+          forwardSourceMessage: message.forwardSourceMessage == null
+              ? null
+              : BackendForwardSourceMessage(
+                  folder: message.forwardSourceMessage!.folder,
+                  uid: message.forwardSourceMessage!.uid,
+                  attachmentIds: message.forwardSourceMessage!.attachmentIds,
+                ),
         ),
         attachments: attachments,
       );

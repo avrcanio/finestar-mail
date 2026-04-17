@@ -747,6 +747,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final folderNames = {
       for (final folder in folders) folder.id: _folderLabel(folder),
     };
+    final folderPaths = {for (final folder in folders) folder.id: folder.path};
     final attachmentByMessageId = <String, List<MailMessageAttachment>>{
       if (selectedRemoteDetail != null)
         selectedRemoteDetail.id: selectedRemoteDetail.attachments,
@@ -785,6 +786,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
             (row) => _threadMessageFromRow(
               row,
               folderNames,
+              folderPaths,
               attachmentByMessageId[row.id] ?? const [],
             ),
           )
@@ -1496,6 +1498,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
   MailThreadMessage _threadMessageFromRow(
     db.MessageDetail row,
     Map<String, String> folderNames,
+    Map<String, String> folderPaths,
     List<MailMessageAttachment> attachments,
   ) {
     final fallbackFolder = row.folderId.isEmpty ? 'Mail' : row.folderId;
@@ -1503,6 +1506,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
       id: row.id,
       folderId: row.folderId,
       folderName: folderNames[row.folderId] ?? fallbackFolder,
+      folderPath: folderPaths[row.folderId] ?? fallbackFolder,
+      backendUid: _uidFromMessageId(row.id),
       subject: row.subject,
       sender: row.sender,
       recipients: _splitRecipients(row.recipients),
@@ -1532,6 +1537,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
             disposition: attachment.disposition,
             isInline: attachment.isInline,
             contentId: attachment.contentId,
+            isVisible: attachment.isVisible,
           ),
         )
         .toList();
@@ -1546,7 +1552,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
   }) async {
     var resolvedHtml = bodyHtml;
     for (final attachment in attachments) {
-      if (!_isReferencedInlineCidResource(bodyHtml, attachment)) {
+      if (!_isReferencedCidImageResource(bodyHtml, attachment)) {
         continue;
       }
       try {
@@ -1580,10 +1586,19 @@ class MailboxRepositoryImpl implements MailboxRepository {
     List<MailMessageAttachment> attachments,
   ) {
     return attachments
-        .where(
-          (attachment) => !_isReferencedInlineCidResource(bodyHtml, attachment),
-        )
+        .where((attachment) => _isVisibleAttachment(bodyHtml, attachment))
         .toList();
+  }
+
+  bool _isVisibleAttachment(
+    String? bodyHtml,
+    MailMessageAttachment attachment,
+  ) {
+    final isVisible = attachment.isVisible;
+    if (isVisible != null) {
+      return isVisible;
+    }
+    return !_isReferencedInlineCidResource(bodyHtml, attachment);
   }
 
   bool _isReferencedInlineCidResource(
@@ -1598,6 +1613,32 @@ class MailboxRepositoryImpl implements MailboxRepository {
       return false;
     }
     return _cidReferencePattern(contentId).hasMatch(bodyHtml);
+  }
+
+  bool _isReferencedCidImageResource(
+    String? bodyHtml,
+    MailMessageAttachment attachment,
+  ) {
+    if (bodyHtml == null || bodyHtml.isEmpty) {
+      return false;
+    }
+    if (!_isImageContentType(attachment.contentType)) {
+      return false;
+    }
+    final contentId = attachment.contentId.trim();
+    if (contentId.isEmpty) {
+      return false;
+    }
+    return _cidReferencePattern(contentId).hasMatch(bodyHtml);
+  }
+
+  bool _isImageContentType(String contentType) {
+    return contentType
+        .toLowerCase()
+        .split(';')
+        .first
+        .trim()
+        .startsWith('image/');
   }
 
   String _replaceCidReferences(String html, String contentId, String value) {

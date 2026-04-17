@@ -283,6 +283,7 @@ void main() {
                   'disposition': 'attachment',
                   'is_inline': false,
                   'content_id': '',
+                  'is_visible': true,
                 },
               ],
             },
@@ -308,6 +309,7 @@ void main() {
     expect(detail.message.attachments.single.disposition, 'attachment');
     expect(detail.message.attachments.single.isInline, isFalse);
     expect(detail.message.attachments.single.contentId, '');
+    expect(detail.message.attachments.single.isVisible, isTrue);
   });
 
   test('message detail parses inline content id metadata', () async {
@@ -341,6 +343,7 @@ void main() {
                   'disposition': 'inline',
                   'is_inline': true,
                   'content_id': 'image001.png@example',
+                  'is_visible': false,
                 },
               ],
             },
@@ -360,6 +363,7 @@ void main() {
     expect(detail.message.hasVisibleAttachments, isFalse);
     expect(detail.message.attachments.single.isInline, isTrue);
     expect(detail.message.attachments.single.contentId, 'image001.png@example');
+    expect(detail.message.attachments.single.isVisible, isFalse);
   });
 
   test('attachment download sends auth and returns binary metadata', () async {
@@ -458,6 +462,68 @@ void main() {
 
     expect(response.messageId, '<sent@example.test>');
   });
+
+  test(
+    'send posts forward source message for JSON and multipart requests',
+    () async {
+      final bodies = <String>[];
+      final client = BackendMailApiClient(
+        httpClient: MockClient((request) async {
+          bodies.add(request.body);
+          expect(request.url.path, '/api/mail/send');
+          expect(request.headers['Authorization'], 'Token session-token');
+          return http.Response(
+            jsonEncode({
+              'account_email': 'app-test-1@finestar.hr',
+              'status': 'sent',
+              'message_id': '<sent@example.test>',
+            }),
+            200,
+          );
+        }),
+        baseUrlLoader: () async => 'https://mail.example.test',
+      );
+
+      const forwardSource = BackendForwardSourceMessage(
+        folder: 'INBOX',
+        uid: '42',
+        attachmentIds: ['pdf_1', 'pdf_2'],
+      );
+      const request = BackendSendRequest(
+        to: ['client@example.test'],
+        cc: [],
+        bcc: [],
+        subject: 'Fwd: TELWIN',
+        textBody: 'Forwarding.',
+        htmlBody: '',
+        replyTo: null,
+        fromDisplayName: 'App Test',
+        forwardSourceMessage: forwardSource,
+      );
+
+      await client.send(token: 'session-token', request: request);
+      await client.send(
+        token: 'session-token',
+        request: request,
+        attachments: const [
+          BackendSendAttachment(
+            filename: 'manual.txt',
+            contentType: 'text/plain',
+            bytes: [104, 105],
+          ),
+        ],
+      );
+
+      expect(jsonDecode(bodies.first)['forward_source_message'], {
+        'folder': 'INBOX',
+        'uid': '42',
+        'attachment_ids': ['pdf_1', 'pdf_2'],
+      });
+      expect(bodies.last, contains('name="forward_source_message"'));
+      expect(bodies.last, contains('"attachment_ids":["pdf_1","pdf_2"]'));
+      expect(bodies.last, contains('filename="manual.txt"'));
+    },
+  );
 
   test(
     'delete endpoints send Authorization and parse success responses',
@@ -752,6 +818,23 @@ void main() {
           'Attachment could not be found.',
         ),
       ),
+    );
+  });
+
+  test('forward attachment errors expose stable user-facing messages', () {
+    expect(
+      const BackendMailApiException(
+        statusCode: 400,
+        code: 'forward_attachment_not_visible',
+      ).userMessage,
+      'One forwarded attachment cannot be sent.',
+    );
+    expect(
+      const BackendMailApiException(
+        statusCode: 400,
+        code: 'forward_attachment_not_found',
+      ).userMessage,
+      'One forwarded attachment could not be found.',
     );
   });
 }

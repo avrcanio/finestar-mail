@@ -1098,6 +1098,70 @@ void main() {
   );
 
   test(
+    'compose repository sends backend forward source attachment ids',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      final storage = _MemorySecureStorageService();
+      addTearDown(database.close);
+      await _insertAccountAndToken(database, storage);
+
+      final repository = ComposeRepositoryImpl(
+        appDatabase: database,
+        logger: Logger(printer: SimplePrinter(printTime: false)),
+        secureStorageService: storage,
+        backendMailApiClient: BackendMailApiClient(
+          httpClient: MockClient((request) async {
+            expect(request.url.path, '/api/mail/send');
+            expect(jsonDecode(request.body), {
+              'to': ['client@example.test'],
+              'cc': <String>[],
+              'bcc': <String>[],
+              'subject': 'Fwd: TELWIN',
+              'text_body': 'Forwarding.',
+              'html_body': '',
+              'reply_to': null,
+              'from_display_name': 'App Test',
+              'forward_source_message': {
+                'folder': 'INBOX',
+                'uid': '42',
+                'attachment_ids': ['pdf_1', 'pdf_2'],
+              },
+            });
+            return http.Response(
+              jsonEncode({
+                'account_email': 'app-test-1@finestar.hr',
+                'status': 'sent',
+                'message_id': '<forwarded@example.test>',
+              }),
+              200,
+            );
+          }),
+          baseUrlLoader: () async => 'https://mail.example.test',
+        ),
+      );
+
+      final result = await repository.send(
+        const OutgoingMessage(
+          accountId: 'app-test-1@finestar.hr',
+          to: ['client@example.test'],
+          cc: [],
+          bcc: [],
+          subject: 'Fwd: TELWIN',
+          body: 'Forwarding.',
+          attachments: [],
+          forwardSourceMessage: ForwardSourceMessage(
+            folder: 'INBOX',
+            uid: '42',
+            attachmentIds: ['pdf_1', 'pdf_2'],
+          ),
+        ),
+      );
+
+      expect(result, isA<Success<void>>());
+    },
+  );
+
+  test(
     'compose repository sends attachments as multipart and caches sent flag',
     () async {
       final database = db.AppDatabase.forTesting(NativeDatabase.memory());

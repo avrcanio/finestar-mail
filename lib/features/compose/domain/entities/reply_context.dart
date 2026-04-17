@@ -1,5 +1,19 @@
 enum ReplyAction { reply, replyAll, forward }
 
+class ForwardedAttachmentRef {
+  const ForwardedAttachmentRef({
+    required this.attachmentId,
+    required this.fileName,
+    required this.sizeBytes,
+    required this.mimeType,
+  });
+
+  final String attachmentId;
+  final String fileName;
+  final int? sizeBytes;
+  final String mimeType;
+}
+
 class ReplyContext {
   const ReplyContext({
     required this.messageId,
@@ -12,6 +26,9 @@ class ReplyContext {
     required this.originalBody,
     this.originalMessageIdHeader,
     this.originalReferencesHeader,
+    this.forwardSourceFolder,
+    this.forwardSourceUid,
+    this.forwardedAttachments = const [],
   });
 
   final String messageId;
@@ -24,4 +41,7 @@ class ReplyContext {
   final String originalBody;
   final String? originalMessageIdHeader;
   final String? originalReferencesHeader;
+  final String? forwardSourceFolder;
+  final String? forwardSourceUid;
+  final List<ForwardedAttachmentRef> forwardedAttachments;
 }
