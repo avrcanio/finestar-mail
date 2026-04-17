@@ -145,6 +145,137 @@ void main() {
     expect(find.text('text/plain - 2 B'), findsOneWidget);
   });
 
+  testWidgets('expanded HTML message renders HTML view instead of plain text', (
+    tester,
+  ) async {
+    const htmlBody =
+        '<h1>Narudzba je poslana</h1><table><tr><td>Nuvola</td></tr></table>';
+    final htmlMessage = MailThreadMessage(
+      id: 'html-message',
+      folderId: 'avrcan@finestar.hr:inbox',
+      folderName: 'INBOX',
+      subject: 'Nuvola Studio',
+      sender: 'shop@nuvola.example',
+      recipients: const ['avrcan@finestar.hr'],
+      bodyPlain: 'Plain Nuvola fallback',
+      bodyHtml: htmlBody,
+      receivedAt: DateTime(2026, 4, 16, 11),
+      messageIdHeader: '<html-message@finestar.hr>',
+      inReplyToHeader: null,
+      referencesHeader: null,
+    );
+    final thread = MailThread(
+      subject: 'Nuvola Studio',
+      selectedMessageId: htmlMessage.id,
+      messages: [htmlMessage],
+    );
+
+    await tester.pumpWidget(
+      _buildTestApp(
+        repository: _FakeMailboxRepository(thread: thread),
+        initialMessageId: htmlMessage.id,
+        emailHtmlViewBuilder: (html) => Text('html-view:$html'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Plain Nuvola fallback'), findsNothing);
+    expect(find.text('html-view:$htmlBody'), findsOneWidget);
+  });
+
+  testWidgets('plain text remains fallback when HTML body is empty', (
+    tester,
+  ) async {
+    final plainMessage = MailThreadMessage(
+      id: 'plain-message',
+      folderId: 'avrcan@finestar.hr:inbox',
+      folderName: 'INBOX',
+      subject: 'PBZ',
+      sender: 'pbz@example.test',
+      recipients: const ['avrcan@finestar.hr'],
+      bodyPlain: 'PBZ plain text body',
+      bodyHtml: '   ',
+      receivedAt: DateTime(2026, 4, 16, 11),
+      messageIdHeader: '<plain-message@finestar.hr>',
+      inReplyToHeader: null,
+      referencesHeader: null,
+    );
+    final thread = MailThread(
+      subject: 'PBZ',
+      selectedMessageId: plainMessage.id,
+      messages: [plainMessage],
+    );
+
+    await tester.pumpWidget(
+      _buildTestApp(
+        repository: _FakeMailboxRepository(thread: thread),
+        initialMessageId: plainMessage.id,
+        emailHtmlViewBuilder: (html) => Text('html-view:$html'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('PBZ plain text body'), findsOneWidget);
+    expect(find.textContaining('html-view:'), findsNothing);
+  });
+
+  testWidgets('collapsed HTML message shows plain preview until expanded', (
+    tester,
+  ) async {
+    const htmlBody = '<table><tr><td>Expanded HTML order</td></tr></table>';
+    final htmlMessage = MailThreadMessage(
+      id: 'html-collapsed-message',
+      folderId: 'avrcan@finestar.hr:inbox',
+      folderName: 'INBOX',
+      subject: 'Nuvola collapsed',
+      sender: 'shop@nuvola.example',
+      recipients: const ['avrcan@finestar.hr'],
+      bodyPlain: 'Collapsed plain preview',
+      bodyHtml: htmlBody,
+      receivedAt: DateTime(2026, 4, 16, 11),
+      messageIdHeader: '<html-collapsed-message@finestar.hr>',
+      inReplyToHeader: null,
+      referencesHeader: null,
+    );
+    final selectedPlainMessage = MailThreadMessage(
+      id: 'selected-plain-message',
+      folderId: 'avrcan@finestar.hr:sent',
+      folderName: 'Sent',
+      subject: 'Re: Nuvola collapsed',
+      sender: 'avrcan@finestar.hr',
+      recipients: const ['shop@nuvola.example'],
+      bodyPlain: 'Selected plain response',
+      bodyHtml: null,
+      receivedAt: DateTime(2026, 4, 16, 11, 5),
+      messageIdHeader: '<selected-plain-message@finestar.hr>',
+      inReplyToHeader: '<html-collapsed-message@finestar.hr>',
+      referencesHeader: '<html-collapsed-message@finestar.hr>',
+    );
+    final thread = MailThread(
+      subject: 'Nuvola collapsed',
+      selectedMessageId: selectedPlainMessage.id,
+      messages: [htmlMessage, selectedPlainMessage],
+    );
+
+    await tester.pumpWidget(
+      _buildTestApp(
+        repository: _FakeMailboxRepository(thread: thread),
+        initialMessageId: selectedPlainMessage.id,
+        emailHtmlViewBuilder: (html) => Text('html-view:$html'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Collapsed plain preview'), findsOneWidget);
+    expect(find.text('html-view:$htmlBody'), findsNothing);
+
+    await tester.tap(find.text('Collapsed plain preview'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Collapsed plain preview'), findsNothing);
+    expect(find.text('html-view:$htmlBody'), findsOneWidget);
+  });
+
   testWidgets(
     'delete moves selected detail message to trash and navigates back',
     (tester) async {
@@ -185,6 +316,7 @@ void main() {
 Widget _buildTestApp({
   _FakeMailboxRepository? repository,
   String? initialMessageId,
+  Widget Function(String html)? emailHtmlViewBuilder,
 }) {
   final router = GoRouter(
     initialLocation: AppRoute.messageDetail.path.replaceFirst(
@@ -194,8 +326,10 @@ Widget _buildTestApp({
     routes: [
       GoRoute(
         path: AppRoute.messageDetail.path,
-        builder: (context, state) =>
-            MessageDetailScreen(messageId: state.pathParameters['id'] ?? ''),
+        builder: (context, state) => MessageDetailScreen(
+          messageId: state.pathParameters['id'] ?? '',
+          emailHtmlViewBuilder: emailHtmlViewBuilder,
+        ),
       ),
       GoRoute(
         path: AppRoute.compose.path,

@@ -182,6 +182,7 @@ void main() {
         id: summaries.single.id,
       );
       expect(detail.bodyPlain, 'Plain backend body');
+      expect(detail.bodyHtml, '<p>Plain backend body</p>');
       expect(detail.attachments.single.id, 'att_1');
       expect(detail.attachments.single.filename, 'smoke.txt');
     },
@@ -218,8 +219,8 @@ void main() {
               [104, 105],
               200,
               headers: {
-                'content-type': 'text/plain',
-                'content-disposition': 'attachment; filename="server.txt"',
+                'content-type': 'application/pdf',
+                'content-disposition': 'attachment; filename="invoice.pdf"',
               },
             );
           }),
@@ -232,16 +233,16 @@ void main() {
         messageId: 'app-test-1@finestar.hr:inbox:api:42',
         attachment: const MailMessageAttachment(
           id: 'att_1',
-          filename: 'local.txt',
-          contentType: 'text/plain',
+          filename: 'local.pdf',
+          contentType: 'application/pdf',
           sizeBytes: 2,
           disposition: 'attachment',
           isInline: false,
         ),
       );
 
-      expect(downloaded.filename, 'server.txt');
-      expect(downloaded.contentType, 'text/plain');
+      expect(downloaded.filename, 'invoice.pdf');
+      expect(downloaded.contentType, 'application/pdf');
       expect(downloaded.bytes, [104, 105]);
     },
   );

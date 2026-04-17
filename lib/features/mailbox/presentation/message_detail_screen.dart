@@ -1,5 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +10,8 @@ import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
@@ -21,9 +26,14 @@ const _screenBackground = Color(0xFFF7F8FC);
 const _mutedText = Color(0xFF5D636B);
 
 class MessageDetailScreen extends ConsumerStatefulWidget {
-  const MessageDetailScreen({super.key, required this.messageId});
+  const MessageDetailScreen({
+    super.key,
+    required this.messageId,
+    this.emailHtmlViewBuilder,
+  });
 
   final String messageId;
+  final Widget Function(String html)? emailHtmlViewBuilder;
 
   @override
   ConsumerState<MessageDetailScreen> createState() =>
@@ -69,6 +79,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                           thread: thread,
                           expandedMessageIds: _expandedMessageIds,
                           visibleQuotedMessageIds: _visibleQuotedMessageIds,
+                          emailHtmlViewBuilder: widget.emailHtmlViewBuilder,
                           onToggleExpanded: _toggleExpanded,
                           onToggleQuoted: _toggleQuoted,
                           onReply: (message) => _openCompose(
@@ -455,6 +466,7 @@ class _MessageThreadContent extends StatelessWidget {
     required this.thread,
     required this.expandedMessageIds,
     required this.visibleQuotedMessageIds,
+    required this.emailHtmlViewBuilder,
     required this.onToggleExpanded,
     required this.onToggleQuoted,
     required this.onReply,
@@ -466,6 +478,7 @@ class _MessageThreadContent extends StatelessWidget {
   final MailThread thread;
   final Set<String> expandedMessageIds;
   final Set<String> visibleQuotedMessageIds;
+  final Widget Function(String html)? emailHtmlViewBuilder;
   final ValueChanged<String> onToggleExpanded;
   final ValueChanged<String> onToggleQuoted;
   final ValueChanged<MailThreadMessage> onReply;
@@ -490,6 +503,7 @@ class _MessageThreadContent extends StatelessWidget {
             isQuotedVisible: visibleQuotedMessageIds.contains(message.id),
             onToggleExpanded: () => onToggleExpanded(message.id),
             onToggleQuoted: () => onToggleQuoted(message.id),
+            emailHtmlViewBuilder: emailHtmlViewBuilder,
             onReply: () => onReply(message),
             onForward: () => onForward(message),
             downloadingAttachmentIds: downloadingAttachmentIds,
@@ -566,6 +580,7 @@ class _ThreadMessageCard extends StatelessWidget {
     required this.message,
     required this.isExpanded,
     required this.isQuotedVisible,
+    required this.emailHtmlViewBuilder,
     required this.onToggleExpanded,
     required this.onToggleQuoted,
     required this.onReply,
@@ -577,6 +592,7 @@ class _ThreadMessageCard extends StatelessWidget {
   final MailThreadMessage message;
   final bool isExpanded;
   final bool isQuotedVisible;
+  final Widget Function(String html)? emailHtmlViewBuilder;
   final VoidCallback onToggleExpanded;
   final VoidCallback onToggleQuoted;
   final VoidCallback onReply;
@@ -595,133 +611,122 @@ class _ThreadMessageCard extends StatelessWidget {
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(18),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: onToggleExpanded,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 14, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _SenderAvatar(sender: message.sender),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Wrap(
-                          spacing: 8,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            Text(
-                              _senderLabel(message.sender),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.titleMedium
-                                  ?.copyWith(
-                                    color: const Color(0xFF202124),
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: 0,
-                                  ),
-                            ),
-                            Text(
-                              DateFormat('h:mm a').format(message.receivedAt),
-                              style: Theme.of(context).textTheme.bodyMedium
-                                  ?.copyWith(
-                                    color: _mutedText,
-                                    fontSize: 14,
-                                    letterSpacing: 0,
-                                  ),
-                            ),
-                          ],
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 14, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _SenderAvatar(sender: message.sender),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Wrap(
+                        spacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Text(
+                            _senderLabel(message.sender),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(
+                                  color: const Color(0xFF202124),
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0,
+                                ),
+                          ),
+                          Text(
+                            DateFormat('h:mm a').format(message.receivedAt),
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(
+                                  color: _mutedText,
+                                  fontSize: 14,
+                                  letterSpacing: 0,
+                                ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'to ${message.recipients.join(', ')} · ${message.folderName}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: _mutedText,
+                          fontSize: 15,
+                          letterSpacing: 0,
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'to ${message.recipients.join(', ')} · ${message.folderName}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(
-                                color: _mutedText,
-                                fontSize: 15,
-                                letterSpacing: 0,
-                              ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Reply',
-                    onPressed: onReply,
-                    icon: const Icon(Icons.reply, color: _mutedText),
-                  ),
-                  IconButton(
-                    tooltip: 'Forward',
-                    onPressed: onForward,
-                    icon: const Icon(Icons.forward, color: _mutedText),
-                  ),
-                  IconButton(
-                    tooltip: 'Message options',
-                    onPressed: () {},
-                    icon: const Icon(Icons.more_vert, color: _mutedText),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              Text(
-                body,
-                maxLines: isExpanded ? null : 2,
-                overflow: isExpanded
-                    ? TextOverflow.visible
-                    : TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: const Color(0xFF202124),
-                  fontSize: 16,
-                  height: 1.42,
-                  letterSpacing: 0,
-                ),
-              ),
-              if (isExpanded && quotedBody != null) ...[
-                const SizedBox(height: 12),
-                TextButton(
-                  onPressed: onToggleQuoted,
-                  style: TextButton.styleFrom(
-                    padding: EdgeInsets.zero,
-                    minimumSize: const Size(0, 36),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    alignment: Alignment.centerLeft,
-                  ),
-                  child: Text(
-                    isQuotedVisible ? 'Hide quoted text' : 'Show quoted text',
+                      ),
+                    ],
                   ),
                 ),
-                if (isQuotedVisible) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    quotedBody,
-                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      color: const Color(0xFF202124),
-                      fontSize: 16,
-                      height: 1.42,
-                      letterSpacing: 0,
-                    ),
-                  ),
-                ],
+                IconButton(
+                  tooltip: 'Reply',
+                  onPressed: onReply,
+                  icon: const Icon(Icons.reply, color: _mutedText),
+                ),
+                IconButton(
+                  tooltip: 'Forward',
+                  onPressed: onForward,
+                  icon: const Icon(Icons.forward, color: _mutedText),
+                ),
+                IconButton(
+                  tooltip: 'Message options',
+                  onPressed: () {},
+                  icon: const Icon(Icons.more_vert, color: _mutedText),
+                ),
               ],
-              if (isExpanded && message.attachments.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                _AttachmentList(
-                  message: message,
-                  downloadingAttachmentIds: downloadingAttachmentIds,
-                  onDownloadAttachment: onDownloadAttachment,
+            ),
+            const SizedBox(height: 20),
+            _MessageBodyView(
+              body: body,
+              htmlBody: message.bodyHtml,
+              isExpanded: isExpanded,
+              onToggleExpanded: onToggleExpanded,
+              emailHtmlViewBuilder: emailHtmlViewBuilder,
+            ),
+            if (isExpanded && quotedBody != null) ...[
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: onToggleQuoted,
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  minimumSize: const Size(0, 36),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  alignment: Alignment.centerLeft,
+                ),
+                child: Text(
+                  isQuotedVisible ? 'Hide quoted text' : 'Show quoted text',
+                ),
+              ),
+              if (isQuotedVisible) ...[
+                const SizedBox(height: 8),
+                Text(
+                  quotedBody,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: const Color(0xFF202124),
+                    fontSize: 16,
+                    height: 1.42,
+                    letterSpacing: 0,
+                  ),
                 ),
               ],
             ],
-          ),
+            if (isExpanded && message.attachments.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              _AttachmentList(
+                message: message,
+                downloadingAttachmentIds: downloadingAttachmentIds,
+                onDownloadAttachment: onDownloadAttachment,
+              ),
+            ],
+          ],
         ),
       ),
     );
@@ -741,6 +746,157 @@ class _ThreadMessageCard extends StatelessWidget {
         )
         .join(' ');
   }
+}
+
+class _MessageBodyView extends StatelessWidget {
+  const _MessageBodyView({
+    required this.body,
+    required this.htmlBody,
+    required this.isExpanded,
+    required this.onToggleExpanded,
+    required this.emailHtmlViewBuilder,
+  });
+
+  final String body;
+  final String? htmlBody;
+  final bool isExpanded;
+  final VoidCallback onToggleExpanded;
+  final Widget Function(String html)? emailHtmlViewBuilder;
+
+  @override
+  Widget build(BuildContext context) {
+    final html = htmlBody?.trim();
+    if (isExpanded && html != null && html.isNotEmpty) {
+      final builder = emailHtmlViewBuilder;
+      if (builder != null) {
+        return builder(html);
+      }
+      return _EmailHtmlView(html: html);
+    }
+
+    final text = Text(
+      body,
+      maxLines: isExpanded ? null : 2,
+      overflow: isExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+        color: const Color(0xFF202124),
+        fontSize: 16,
+        height: 1.42,
+        letterSpacing: 0,
+      ),
+    );
+    if (isExpanded) {
+      return text;
+    }
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onToggleExpanded,
+      child: SizedBox(width: double.infinity, child: text),
+    );
+  }
+}
+
+class _EmailHtmlView extends StatefulWidget {
+  const _EmailHtmlView({required this.html});
+
+  final String html;
+
+  @override
+  State<_EmailHtmlView> createState() => _EmailHtmlViewState();
+}
+
+class _EmailHtmlViewState extends State<_EmailHtmlView> {
+  late final WebViewController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.disabled)
+      ..setBackgroundColor(Colors.white)
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onNavigationRequest: (request) {
+            final uri = Uri.tryParse(request.url);
+            if (uri == null) {
+              return NavigationDecision.prevent;
+            }
+            if (_isExternalLink(uri)) {
+              unawaited(_openExternalUrl(uri));
+            }
+            return NavigationDecision.prevent;
+          },
+        ),
+      )
+      ..loadHtmlString(_wrapEmailHtml(widget.html));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final height = (MediaQuery.sizeOf(context).height * 0.62)
+        .clamp(360.0, 720.0)
+        .toDouble();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox(
+        key: const ValueKey('email-html-webview'),
+        height: height,
+        width: double.infinity,
+        child: WebViewWidget(
+          controller: _controller,
+          gestureRecognizers: {
+            Factory<OneSequenceGestureRecognizer>(
+              () => EagerGestureRecognizer(),
+            ),
+          },
+        ),
+      ),
+    );
+  }
+}
+
+bool _isExternalLink(Uri uri) {
+  return uri.scheme == 'http' ||
+      uri.scheme == 'https' ||
+      uri.scheme == 'mailto' ||
+      uri.scheme == 'tel';
+}
+
+Future<void> _openExternalUrl(Uri uri) async {
+  try {
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {
+    // Ignore failed external handoff; the email view must never navigate inline.
+  }
+}
+
+String _wrapEmailHtml(String rawHtml) {
+  return '''
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #ffffff;
+      color: #222222;
+    }
+    body {
+      overflow-wrap: break-word;
+      -webkit-text-size-adjust: 100%;
+    }
+    img, table {
+      max-width: 100%;
+    }
+  </style>
+</head>
+<body>
+$rawHtml
+</body>
+</html>
+''';
 }
 
 class _AttachmentList extends StatelessWidget {

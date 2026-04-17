@@ -54,6 +54,8 @@ dependencies:
   flutter_local_notifications: ^21.0.0
   open_filex: ^4.7.0
   http_parser: ^4.1.2
+  webview_flutter: ^4.13.1
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:
