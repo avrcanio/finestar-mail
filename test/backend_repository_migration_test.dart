@@ -13,6 +13,7 @@ import 'package:finestar_mail/features/auth/domain/entities/connection_settings.
 import 'package:finestar_mail/features/compose/data/compose_repository_impl.dart';
 import 'package:finestar_mail/features/compose/domain/entities/outgoing_message.dart';
 import 'package:finestar_mail/features/mailbox/data/mailbox_repository_impl.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_conversation.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_attachment.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -585,6 +586,116 @@ void main() {
       ]),
     );
   });
+
+  test(
+    'mailbox repository maps unified conversations and caches timeline messages',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      final storage = _MemorySecureStorageService();
+      addTearDown(database.close);
+      await storage.saveAuthToken(
+        accountId: 'app-test-1@finestar.hr',
+        token: 'backend-token',
+      );
+
+      final repository = MailboxRepositoryImpl(
+        appDatabase: database,
+        secureStorageService: storage,
+        backendMailApiClient: BackendMailApiClient(
+          httpClient: MockClient((request) async {
+            expect(request.url.path, '/api/mail/unified-conversations');
+            expect(request.url.queryParameters, {'limit': '50'});
+            return http.Response(
+              jsonEncode({
+                'account_email': 'app-test-1@finestar.hr',
+                'folders': [
+                  {'name': 'INBOX', 'path': 'INBOX'},
+                  {'name': 'Sent', 'path': 'Sent'},
+                ],
+                'conversations': [
+                  {
+                    'conversation_id': 'thread-1',
+                    'message_count': 2,
+                    'reply_count': 1,
+                    'has_unread': true,
+                    'has_attachments': true,
+                    'has_visible_attachments': true,
+                    'participants': [
+                      {'name': 'Client', 'email': 'client@example.test'},
+                    ],
+                    'latest_date': '2026-04-17T10:00:00Z',
+                    'messages': [
+                      {
+                        'uid': '40',
+                        'folder': 'INBOX',
+                        'direction': 'inbound',
+                        'subject': 'Conversation root',
+                        'sender': 'Client <client@example.test>',
+                        'to': ['app-test-1@finestar.hr'],
+                        'cc': [],
+                        'date': '2026-04-17T08:00:00Z',
+                        'message_id': '<root@example.test>',
+                        'flags': [],
+                        'size': 123,
+                        'has_attachments': false,
+                        'has_visible_attachments': false,
+                      },
+                      {
+                        'uid': '41',
+                        'folder': 'Sent',
+                        'direction': 'outbound',
+                        'subject': 'Re: Conversation root',
+                        'sender': 'app-test-1@finestar.hr',
+                        'to': ['client@example.test'],
+                        'cc': [],
+                        'date': '2026-04-17T10:00:00Z',
+                        'message_id': '<reply@example.test>',
+                        'flags': ['Seen'],
+                        'size': 456,
+                        'has_attachments': true,
+                        'has_visible_attachments': true,
+                      },
+                    ],
+                  },
+                ],
+              }),
+              200,
+            );
+          }),
+          baseUrlLoader: () async => 'https://mail.example.test',
+        ),
+      );
+
+      final conversations = await repository.getUnifiedConversations(
+        accountId: 'app-test-1@finestar.hr',
+      );
+
+      expect(conversations.single.id, 'thread-1');
+      expect(
+        conversations.single.messages.first.message.id,
+        endsWith(':api:40'),
+      );
+      expect(
+        conversations.single.messages.last.message.id,
+        contains(':sent:api:41'),
+      );
+      expect(
+        conversations.single.messages.last.direction,
+        MailConversationDirection.outbound,
+      );
+      expect(conversations.single.hasUnread, isTrue);
+      expect(conversations.single.hasVisibleAttachments, isTrue);
+
+      final cachedRows = await database.select(database.messageSummaries).get();
+      expect(
+        cachedRows.map((row) => row.id),
+        containsAll([
+          'app-test-1@finestar.hr:inbox:api:40',
+          'app-test-1@finestar.hr:sent:api:41',
+        ]),
+      );
+    },
+  );
 
   test(
     'mailbox repository moves backend messages to trash and removes cache rows',

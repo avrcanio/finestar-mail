@@ -5,6 +5,7 @@ import 'package:finestar_mail/features/auth/domain/entities/mail_account.dart';
 import 'package:finestar_mail/features/auth/presentation/auth_controller.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_delete_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_conversation.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_attachment.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
@@ -153,6 +154,53 @@ void main() {
     expect(find.byIcon(Icons.attach_file), findsOneWidget);
   });
 
+  testWidgets('unified conversation renders outbound row and opens exact row', (
+    tester,
+  ) async {
+    final repository = _FakeMailboxRepository(
+      unifiedConversations: [_unifiedConversation],
+    );
+    await tester.pumpWidget(_buildTestApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Unified root'), findsOneWidget);
+    expect(find.text('Unified sent reply'), findsOneWidget);
+    expect(find.text('Sent'), findsOneWidget);
+    expect(find.byIcon(Icons.attach_file), findsOneWidget);
+
+    await tester.tap(find.text('Unified sent reply'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('detail:unified-sent-1'), findsOneWidget);
+  });
+
+  testWidgets('unified conversation reply selection targets reply row', (
+    tester,
+  ) async {
+    final repository = _FakeMailboxRepository(
+      unifiedConversations: [_unifiedConversation],
+    );
+    await tester.pumpWidget(_buildTestApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('Unified sent reply'),
+          matching: find.byType(ListTile),
+        ),
+        matching: find.byType(CircleAvatar),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Move selected to Trash'));
+    await tester.pumpAndSettle();
+
+    expect(repository.deletedMessageIds, ['unified-sent-1']);
+  });
+
   testWidgets('avatar opens account management route', (tester) async {
     await tester.pumpWidget(_buildTestApp());
     await tester.pumpAndSettle();
@@ -204,7 +252,7 @@ void main() {
     expect(repository.messages.first.isRead, isTrue);
   });
 
-  testWidgets('scrolling near bottom appends older messages once', (
+  testWidgets('unified inbox list does not request flat cursor pagination', (
     tester,
   ) async {
     final repository = _FakeMailboxRepository(initialMessageCount: 24);
@@ -216,11 +264,8 @@ void main() {
     await tester.drag(find.byType(ListView).last, const Offset(0, -2500));
     await tester.pumpAndSettle();
 
-    expect(find.text('Older backend page'), findsOneWidget);
-    expect(
-      repository.pageRequests.where((cursor) => cursor == '2'),
-      hasLength(1),
-    );
+    expect(find.text('Older backend page'), findsNothing);
+    expect(repository.pageRequests, isEmpty);
   });
 
   test('mailbox controller prevents duplicate concurrent load more', () async {
@@ -310,6 +355,12 @@ Widget _buildTestApp({_FakeMailboxRepository? repository}) {
         builder: (context, state) =>
             const Scaffold(body: Center(child: Text('Manage your account'))),
       ),
+      GoRoute(
+        path: AppRoute.messageDetail.path,
+        builder: (context, state) => Scaffold(
+          body: Center(child: Text('detail:${state.pathParameters['id']}')),
+        ),
+      ),
     ],
   );
 
@@ -346,57 +397,108 @@ const _inboxFolder = MailFolder(
   isInbox: true,
 );
 
+final _unifiedRoot = MailMessageSummary(
+  id: 'unified-root-1',
+  folderId: 'app-test-2@finestar.hr:inbox',
+  subject: 'Unified root',
+  sender: 'client@finestar.hr',
+  preview: 'Unified root preview',
+  receivedAt: DateTime(2026, 4, 16, 8),
+  isRead: false,
+  hasAttachments: false,
+  sequence: 30,
+);
+
+final _unifiedSentReply = MailMessageSummary(
+  id: 'unified-sent-1',
+  folderId: 'app-test-2@finestar.hr:sent',
+  subject: 'Unified sent reply',
+  sender: 'app-test-2@finestar.hr',
+  preview: 'Outbound reply preview',
+  receivedAt: DateTime(2026, 4, 16, 9),
+  isRead: true,
+  hasAttachments: false,
+  sequence: 31,
+);
+
+final _unifiedConversation = MailConversation(
+  id: 'unified-conversation-1',
+  messageCount: 2,
+  replyCount: 1,
+  hasUnread: true,
+  hasAttachments: true,
+  hasVisibleAttachments: true,
+  participants: const [
+    MailConversationParticipant(name: 'Client', email: 'client@finestar.hr'),
+  ],
+  messages: [
+    MailConversationMessage(
+      message: _unifiedRoot,
+      direction: MailConversationDirection.inbound,
+    ),
+    MailConversationMessage(
+      message: _unifiedSentReply,
+      direction: MailConversationDirection.outbound,
+    ),
+  ],
+  latestDate: DateTime(2026, 4, 16, 9),
+);
+
 class _FakeMailboxRepository implements MailboxRepository {
-  _FakeMailboxRepository({int initialMessageCount = 2, bool backendIds = false})
-    : messages = [
-        MailMessageSummary(
-          id: backendIds
-              ? 'app-test-2@finestar.hr:inbox:api:2'
-              : 'app-test-2@finestar.hr:inbox:imap:2',
-          folderId: 'app-test-2@finestar.hr:inbox',
-          subject: 'Pinned important',
-          sender: 'client@finestar.hr',
-          preview: 'Pinned unread message',
-          receivedAt: DateTime(2026, 4, 16, 8),
-          isRead: false,
-          isImportant: true,
-          isPinned: true,
-          hasAttachments: true,
-          sequence: 2,
-        ),
-        MailMessageSummary(
-          id: backendIds
-              ? 'app-test-2@finestar.hr:inbox:api:3'
-              : 'app-test-2@finestar.hr:inbox:imap:3',
-          folderId: 'app-test-2@finestar.hr:inbox',
-          subject: 'Read normal',
-          sender: 'team@finestar.hr',
-          preview: 'Regular read message',
-          receivedAt: DateTime(2026, 4, 16, 9),
-          isRead: true,
-          hasAttachments: false,
-          sequence: 3,
-        ),
-        for (var index = 4; index < initialMessageCount + 2; index++)
-          MailMessageSummary(
-            id: 'app-test-2@finestar.hr:inbox:imap:$index',
-            folderId: 'app-test-2@finestar.hr:inbox',
-            subject: 'Inbox message $index',
-            sender: 'team@finestar.hr',
-            preview: 'Extra message $index',
-            receivedAt: DateTime(
-              2026,
-              4,
-              16,
-              9,
-            ).subtract(Duration(minutes: index)),
-            isRead: true,
-            hasAttachments: false,
-            sequence: index,
-          ),
-      ];
+  _FakeMailboxRepository({
+    int initialMessageCount = 2,
+    bool backendIds = false,
+    this.unifiedConversations,
+  }) : messages = [
+         MailMessageSummary(
+           id: backendIds
+               ? 'app-test-2@finestar.hr:inbox:api:2'
+               : 'app-test-2@finestar.hr:inbox:imap:2',
+           folderId: 'app-test-2@finestar.hr:inbox',
+           subject: 'Pinned important',
+           sender: 'client@finestar.hr',
+           preview: 'Pinned unread message',
+           receivedAt: DateTime(2026, 4, 16, 8),
+           isRead: false,
+           isImportant: true,
+           isPinned: true,
+           hasAttachments: true,
+           sequence: 2,
+         ),
+         MailMessageSummary(
+           id: backendIds
+               ? 'app-test-2@finestar.hr:inbox:api:3'
+               : 'app-test-2@finestar.hr:inbox:imap:3',
+           folderId: 'app-test-2@finestar.hr:inbox',
+           subject: 'Read normal',
+           sender: 'team@finestar.hr',
+           preview: 'Regular read message',
+           receivedAt: DateTime(2026, 4, 16, 9),
+           isRead: true,
+           hasAttachments: false,
+           sequence: 3,
+         ),
+         for (var index = 4; index < initialMessageCount + 2; index++)
+           MailMessageSummary(
+             id: 'app-test-2@finestar.hr:inbox:imap:$index',
+             folderId: 'app-test-2@finestar.hr:inbox',
+             subject: 'Inbox message $index',
+             sender: 'team@finestar.hr',
+             preview: 'Extra message $index',
+             receivedAt: DateTime(
+               2026,
+               4,
+               16,
+               9,
+             ).subtract(Duration(minutes: index)),
+             isRead: true,
+             hasAttachments: false,
+             sequence: index,
+           ),
+       ];
 
   final List<MailMessageSummary> messages;
+  final List<MailConversation>? unifiedConversations;
   final trashMessages = <MailMessageSummary>[
     MailMessageSummary(
       id: 'app-test-2@finestar.hr:trash:api:2',
@@ -486,6 +588,39 @@ class _FakeMailboxRepository implements MailboxRepository {
     int pageSize = 20,
     bool forceRefresh = false,
   }) async => const [];
+
+  @override
+  Future<List<MailConversation>> getUnifiedConversations({
+    required String accountId,
+    int limit = 50,
+    bool forceRefresh = false,
+  }) async {
+    if (unifiedConversations != null) {
+      return unifiedConversations!;
+    }
+    return messages
+        .map(
+          (message) => MailConversation(
+            id: message.id,
+            messageCount: 1,
+            replyCount: 0,
+            hasUnread: !message.isRead,
+            hasAttachments: message.hasAttachments,
+            hasVisibleAttachments: message.hasAttachments,
+            participants: [
+              MailConversationParticipant(name: '', email: message.sender),
+            ],
+            messages: [
+              MailConversationMessage(
+                message: message,
+                direction: MailConversationDirection.inbound,
+              ),
+            ],
+            latestDate: message.receivedAt,
+          ),
+        )
+        .toList();
+  }
 
   @override
   Future<List<MailMessageSummary>> getMessages({

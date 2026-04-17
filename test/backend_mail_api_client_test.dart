@@ -216,6 +216,91 @@ void main() {
     },
   );
 
+  test('unifiedConversations parses timeline response', () async {
+    http.Request? capturedRequest;
+    final client = BackendMailApiClient(
+      httpClient: MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(
+          jsonEncode({
+            'account_email': 'app-test-1@finestar.hr',
+            'folders': [
+              {'name': 'INBOX', 'path': 'INBOX'},
+              {'name': 'Sent', 'path': 'Sent'},
+            ],
+            'conversations': [
+              {
+                'conversation_id': 'unified-1',
+                'message_count': 2,
+                'reply_count': 1,
+                'has_unread': true,
+                'has_attachments': true,
+                'has_visible_attachments': false,
+                'participants': [
+                  {'name': 'Client', 'email': 'client@example.test'},
+                ],
+                'latest_date': '2026-04-17T10:00:00Z',
+                'messages': [
+                  {
+                    'uid': '40',
+                    'folder': 'INBOX',
+                    'direction': 'inbound',
+                    'subject': 'Unified root',
+                    'sender': 'client@example.test',
+                    'to': ['app-test-1@finestar.hr'],
+                    'cc': [],
+                    'date': '2026-04-17T08:00:00Z',
+                    'message_id': '<root@example.test>',
+                    'flags': [],
+                    'size': 123,
+                    'has_attachments': false,
+                    'has_visible_attachments': false,
+                  },
+                  {
+                    'uid': '12',
+                    'folder': 'Sent',
+                    'direction': 'outbound',
+                    'subject': 'Re: Unified root',
+                    'sender': 'app-test-1@finestar.hr',
+                    'to': ['client@example.test'],
+                    'cc': [],
+                    'date': '2026-04-17T10:00:00Z',
+                    'message_id': '<reply@example.test>',
+                    'flags': ['Seen'],
+                    'size': 456,
+                    'has_attachments': true,
+                    'has_visible_attachments': false,
+                  },
+                ],
+              },
+            ],
+          }),
+          200,
+        );
+      }),
+      baseUrlLoader: () async => 'https://mail.example.test',
+    );
+
+    final response = await client.unifiedConversations(
+      token: 'session-token',
+      limit: 50,
+    );
+
+    expect(capturedRequest?.url.path, '/api/mail/unified-conversations');
+    expect(capturedRequest?.url.queryParameters, {'limit': '50'});
+    expect(response.accountEmail, 'app-test-1@finestar.hr');
+    expect(response.folders.map((folder) => folder.path), ['INBOX', 'Sent']);
+    final conversation = response.conversations.single;
+    expect(conversation.conversationId, 'unified-1');
+    expect(conversation.hasUnread, isTrue);
+    expect(conversation.hasAttachments, isTrue);
+    expect(conversation.hasVisibleAttachments, isFalse);
+    expect(conversation.messages.first.summary.folder, 'INBOX');
+    expect(conversation.messages.first.direction, 'inbound');
+    expect(conversation.messages.last.summary.folder, 'Sent');
+    expect(conversation.messages.last.direction, 'outbound');
+  });
+
   test('folders parses hierarchy metadata when present', () async {
     final client = BackendMailApiClient(
       httpClient: MockClient((request) async {

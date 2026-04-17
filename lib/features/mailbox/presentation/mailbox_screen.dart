@@ -11,6 +11,7 @@ import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
 import '../../auth/domain/entities/mail_account.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../domain/entities/mail_conversation.dart';
 import '../domain/entities/mail_folder.dart';
 import '../domain/entities/mail_message_summary.dart';
 import 'mailbox_controller.dart';
@@ -83,9 +84,13 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
     setState(() => _isProcessingSelection = true);
     final requestedIds = _selectedMessageIds.toList();
     try {
-      final result = await ref
-          .read(mailboxMessagesControllerProvider(folder).notifier)
-          .moveSelectedToTrash(requestedIds);
+      final result = _isInbox(folder)
+          ? await ref
+                .read(mailboxConversationsControllerProvider(folder).notifier)
+                .moveSelectedToTrash(requestedIds)
+          : await ref
+                .read(mailboxMessagesControllerProvider(folder).notifier)
+                .moveSelectedToTrash(requestedIds);
       if (!mounted) {
         return;
       }
@@ -139,9 +144,13 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
     setState(() => _isProcessingSelection = true);
     final requestedIds = _selectedMessageIds.toList();
     try {
-      final result = await ref
-          .read(mailboxMessagesControllerProvider(folder).notifier)
-          .restoreSelectedToInbox(requestedIds);
+      final result = _isInbox(folder)
+          ? await ref
+                .read(mailboxConversationsControllerProvider(folder).notifier)
+                .restoreSelectedToInbox(requestedIds)
+          : await ref
+                .read(mailboxMessagesControllerProvider(folder).notifier)
+                .restoreSelectedToInbox(requestedIds);
       if (!mounted) {
         return;
       }
@@ -828,7 +837,9 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
   }
 
   void _maybeLoadMore() {
-    if (widget.searchQuery.isNotEmpty || !_scrollController.hasClients) {
+    if (widget.searchQuery.isNotEmpty ||
+        _isInbox(widget.folder) ||
+        !_scrollController.hasClients) {
       return;
     }
     final position = _scrollController.position;
@@ -852,13 +863,21 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
     final searchAsync = isSearching
         ? ref.watch(mailboxSearchProvider(searchRequest))
         : null;
-    final pagedAsync = isSearching
+    final showConversations = !isSearching && _isInbox(folder);
+    final conversationsAsync = showConversations
+        ? ref.watch(mailboxConversationsControllerProvider(folder))
+        : null;
+    final pagedAsync = isSearching || showConversations
         ? null
         : ref.watch(mailboxMessagesControllerProvider(folder));
 
     return RefreshIndicator(
       onRefresh: () => isSearching
           ? ref.refresh(mailboxSearchProvider(searchRequest).future)
+          : showConversations
+          ? ref
+                .read(mailboxConversationsControllerProvider(folder).notifier)
+                .refresh()
           : ref
                 .read(mailboxMessagesControllerProvider(folder).notifier)
                 .refresh(),
@@ -874,51 +893,349 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
-          (isSearching ? searchAsync! : pagedAsync!).when(
-            data: (messages) {
-              final visibleMessages = isSearching
-                  ? messages as List<MailMessageSummary>
-                  : (messages as MailboxMessagesState).messages;
-              if (visibleMessages.isEmpty) {
-                return EmptyStateView(
-                  title: isSearching ? 'No matching mail' : 'No messages yet',
-                  message: isSearching
-                      ? 'Try another keyword or clear the search.'
-                      : 'Once ${_folderLabel(folder)} syncs, messages will appear here.',
-                );
-              }
+          (isSearching
+                  ? searchAsync!
+                  : showConversations
+                  ? conversationsAsync!
+                  : pagedAsync!)
+              .when(
+                data: (data) {
+                  if (showConversations) {
+                    final conversations =
+                        (data as MailboxConversationsState).conversations;
+                    if (conversations.isEmpty) {
+                      return EmptyStateView(
+                        title: 'No messages yet',
+                        message:
+                            'Once ${_folderLabel(folder)} syncs, messages will appear here.',
+                      );
+                    }
+                    return _ConversationList(
+                      conversations: conversations,
+                      folder: folder,
+                      selectedMessageIds: widget.selectedMessageIds,
+                      onToggleSelected: widget.onToggleSelected,
+                    );
+                  }
 
-              return Column(
+                  final visibleMessages = isSearching
+                      ? data as List<MailMessageSummary>
+                      : (data as MailboxMessagesState).messages;
+                  if (visibleMessages.isEmpty) {
+                    return EmptyStateView(
+                      title: isSearching
+                          ? 'No matching mail'
+                          : 'No messages yet',
+                      message: isSearching
+                          ? 'Try another keyword or clear the search.'
+                          : 'Once ${_folderLabel(folder)} syncs, messages will appear here.',
+                    );
+                  }
+
+                  return Column(
+                    children: [
+                      _MessageList(
+                        messages: visibleMessages,
+                        folder: folder,
+                        selectedMessageIds: widget.selectedMessageIds,
+                        selectionEnabled: !isSearching,
+                        onToggleSelected: widget.onToggleSelected,
+                      ),
+                      if (!isSearching)
+                        _LoadMoreFooter(
+                          state: data as MailboxMessagesState,
+                          onRetry: () => ref
+                              .read(
+                                mailboxMessagesControllerProvider(
+                                  folder,
+                                ).notifier,
+                              )
+                              .loadMore(),
+                        ),
+                    ],
+                  );
+                },
+                error: (error, stackTrace) => ErrorStateView(
+                  message: error.toString(),
+                  onRetry: () => isSearching
+                      ? ref.invalidate(mailboxSearchProvider(searchRequest))
+                      : showConversations
+                      ? ref.invalidate(
+                          mailboxConversationsControllerProvider(folder),
+                        )
+                      : ref.invalidate(
+                          mailboxMessagesControllerProvider(folder),
+                        ),
+                ),
+                loading: () => const Center(child: CircularProgressIndicator()),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ConversationList extends ConsumerWidget {
+  const _ConversationList({
+    required this.conversations,
+    required this.folder,
+    required this.selectedMessageIds,
+    required this.onToggleSelected,
+  });
+
+  final List<MailConversation> conversations;
+  final MailFolder folder;
+  final Set<String> selectedMessageIds;
+  final ValueChanged<String> onToggleSelected;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Column(
+      children: [
+        for (final conversation in conversations)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: SectionCard(
+              color:
+                  conversation.messages.any(
+                    (message) =>
+                        selectedMessageIds.contains(message.message.id),
+                  )
+                  ? const Color(0xFFD7EAFE)
+                  : conversation.hasUnread
+                  ? const Color(0xFFEAF4FF)
+                  : Colors.white,
+              padding: const EdgeInsets.all(0),
+              child: Column(
                 children: [
-                  _MessageList(
-                    messages: visibleMessages,
-                    folder: folder,
-                    selectedMessageIds: widget.selectedMessageIds,
-                    selectionEnabled: !isSearching,
-                    onToggleSelected: widget.onToggleSelected,
-                  ),
-                  if (!isSearching)
-                    _LoadMoreFooter(
-                      state: messages as MailboxMessagesState,
-                      onRetry: () => ref
-                          .read(
-                            mailboxMessagesControllerProvider(folder).notifier,
-                          )
-                          .loadMore(),
+                  for (
+                    var index = 0;
+                    index < conversation.messages.length;
+                    index++
+                  )
+                    _ConversationMessageRow(
+                      item: conversation.messages[index],
+                      folder: folder,
+                      selected: selectedMessageIds.contains(
+                        conversation.messages[index].message.id,
+                      ),
+                      selectionActive: selectedMessageIds.isNotEmpty,
+                      onToggleSelected: onToggleSelected,
+                      aggregateHasAttachments: index == 0
+                          ? conversation.hasVisibleAttachments
+                          : null,
+                      aggregateUnread: index == 0
+                          ? conversation.hasUnread
+                          : null,
+                      replyCount: index == 0 ? conversation.replyCount : 0,
+                      isThreadChild: index > 0,
+                      isLast: index == conversation.messages.length - 1,
                     ),
                 ],
-              );
-            },
-            error: (error, stackTrace) => ErrorStateView(
-              message: error.toString(),
-              onRetry: () => isSearching
-                  ? ref.invalidate(mailboxSearchProvider(searchRequest))
-                  : ref.invalidate(mailboxMessagesControllerProvider(folder)),
+              ),
             ),
-            loading: () => const Center(child: CircularProgressIndicator()),
+          ),
+      ],
+    );
+  }
+}
+
+class _ConversationMessageRow extends ConsumerWidget {
+  const _ConversationMessageRow({
+    required this.item,
+    required this.folder,
+    required this.selected,
+    required this.selectionActive,
+    required this.onToggleSelected,
+    required this.isThreadChild,
+    required this.isLast,
+    this.aggregateHasAttachments,
+    this.aggregateUnread,
+    this.replyCount = 0,
+  });
+
+  final MailConversationMessage item;
+  final MailFolder folder;
+  final bool selected;
+  final bool selectionActive;
+  final ValueChanged<String> onToggleSelected;
+  final bool isThreadChild;
+  final bool isLast;
+  final bool? aggregateHasAttachments;
+  final bool? aggregateUnread;
+  final int replyCount;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final child = _ConversationListTile(
+      item: item,
+      folder: folder,
+      selected: selected,
+      selectionActive: selectionActive,
+      onToggleSelected: onToggleSelected,
+      aggregateHasAttachments: aggregateHasAttachments,
+      aggregateUnread: aggregateUnread,
+      replyCount: replyCount,
+    );
+    if (!isThreadChild) {
+      return child;
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 42,
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: Container(
+              width: 2,
+              height: isLast ? 58 : 92,
+              color: const Color(0xFFDADCE0),
+            ),
+          ),
+        ),
+        Expanded(child: child),
+      ],
+    );
+  }
+}
+
+class _ConversationListTile extends ConsumerWidget {
+  const _ConversationListTile({
+    required this.item,
+    required this.folder,
+    required this.selected,
+    required this.selectionActive,
+    required this.onToggleSelected,
+    this.aggregateHasAttachments,
+    this.aggregateUnread,
+    this.replyCount = 0,
+  });
+
+  final MailConversationMessage item;
+  final MailFolder folder;
+  final bool selected;
+  final bool selectionActive;
+  final ValueChanged<String> onToggleSelected;
+  final bool? aggregateHasAttachments;
+  final bool? aggregateUnread;
+  final int replyCount;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final message = item.message;
+    final formatter = DateFormat('MMM d');
+    final isOutbound = item.direction == MailConversationDirection.outbound;
+    final isUnread = aggregateUnread ?? !message.isRead;
+    final hasAttachments = aggregateHasAttachments ?? message.hasAttachments;
+    return ListTile(
+      onLongPress: () => _showConversationActions(
+        context: context,
+        ref: ref,
+        message: message,
+        folder: folder,
+      ),
+      onTap: selectionActive
+          ? () => onToggleSelected(message.id)
+          : () => context.push(
+              AppRoute.messageDetail.path.replaceFirst(':id', message.id),
+            ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      leading: Tooltip(
+        message: 'Select message',
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () => onToggleSelected(message.id),
+          child: CircleAvatar(
+            backgroundColor: selected
+                ? Theme.of(context).colorScheme.primary
+                : const Color(0xFFE8EFF8),
+            child: selected
+                ? const Icon(Icons.check, color: Colors.white, size: 20)
+                : Text(
+                    _senderInitial(message.sender),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+          ),
+        ),
+      ),
+      title: Row(
+        children: [
+          if (isOutbound) ...[
+            const Icon(Icons.send_outlined, size: 15),
+            const SizedBox(width: 5),
+            Text(
+              'Sent',
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: const Color(0xFF2563A8),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+          Expanded(
+            child: Text(
+              message.subject,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontWeight: isUnread ? FontWeight.w800 : FontWeight.w500,
+              ),
+            ),
+          ),
+          if (replyCount > 0) ...[
+            const SizedBox(width: 8),
+            Text(
+              '$replyCount replies',
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: const Color(0xFF5F6368),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
+      ),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(
+          '${message.sender}\n${message.preview}',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+      trailing: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(formatter.format(message.receivedAt)),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (message.isImportant)
+                const Icon(Icons.error, size: 16, color: Color(0xFFD93025)),
+              if (message.isPinned)
+                const Padding(
+                  padding: EdgeInsets.only(left: 4),
+                  child: Icon(
+                    Icons.push_pin,
+                    size: 16,
+                    color: Color(0xFF153B52),
+                  ),
+                ),
+              if (hasAttachments)
+                const Padding(
+                  padding: EdgeInsets.only(left: 4),
+                  child: Icon(Icons.attach_file, size: 16),
+                ),
+            ],
           ),
         ],
       ),
+      isThreeLine: true,
     );
   }
 }
@@ -1176,6 +1493,92 @@ class _MessageList extends ConsumerWidget {
       },
     );
   }
+}
+
+String _senderInitial(String sender) {
+  final trimmed = sender.trim();
+  if (trimmed.isEmpty) {
+    return '?';
+  }
+  return trimmed.characters.first.toUpperCase();
+}
+
+Future<void> _showConversationActions({
+  required BuildContext context,
+  required WidgetRef ref,
+  required MailMessageSummary message,
+  required MailFolder folder,
+}) async {
+  final account = ref.read(activeAccountProvider).asData?.value;
+  if (account == null) {
+    return;
+  }
+
+  Future<void> apply(Future<void> Function() action) async {
+    Navigator.of(context).pop();
+    await action();
+    ref.invalidate(mailboxConversationsControllerProvider(folder));
+    ref.invalidate(mailboxMessagesControllerProvider(folder));
+  }
+
+  await showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) {
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(
+                message.isRead
+                    ? Icons.mark_email_unread_outlined
+                    : Icons.mark_email_read_outlined,
+              ),
+              title: Text(message.isRead ? 'Mark as unread' : 'Mark as read'),
+              onTap: () => apply(
+                () => ref
+                    .read(mailboxRepositoryProvider)
+                    .setMessageRead(
+                      accountId: account.id,
+                      messageId: message.id,
+                      isRead: !message.isRead,
+                    ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.error_outline),
+              title: Text(
+                message.isImportant ? 'Remove important' : 'Mark important',
+              ),
+              onTap: () => apply(
+                () => ref
+                    .read(mailboxRepositoryProvider)
+                    .setMessageImportant(
+                      accountId: account.id,
+                      messageId: message.id,
+                      isImportant: !message.isImportant,
+                    ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.push_pin_outlined),
+              title: Text(message.isPinned ? 'Unpin' : 'Pin to top'),
+              onTap: () => apply(
+                () => ref
+                    .read(mailboxRepositoryProvider)
+                    .setMessagePinned(
+                      accountId: account.id,
+                      messageId: message.id,
+                      isPinned: !message.isPinned,
+                    ),
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }
 
 enum _FolderRole { inbox, sent, drafts, trash, junk, archive, custom }
