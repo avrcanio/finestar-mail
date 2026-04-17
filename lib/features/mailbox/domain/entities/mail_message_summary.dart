@@ -9,6 +9,8 @@ class MailMessageSummary {
     required this.isRead,
     required this.hasAttachments,
     required this.sequence,
+    this.isImportant = false,
+    this.isPinned = false,
   });
 
   final String id;
@@ -20,4 +22,6 @@ class MailMessageSummary {
   final bool isRead;
   final bool hasAttachments;
   final int sequence;
+  final bool isImportant;
+  final bool isPinned;
 }

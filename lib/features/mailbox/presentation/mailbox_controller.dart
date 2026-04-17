@@ -2,9 +2,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../domain/entities/mail_delete_result.dart';
 import '../domain/entities/mail_folder.dart';
+import '../domain/entities/mail_conversation.dart';
 import '../domain/entities/mail_message_detail.dart';
+import '../domain/entities/mail_message_page.dart';
 import '../domain/entities/mail_message_summary.dart';
+import '../domain/entities/mail_restore_result.dart';
+import '../domain/entities/mail_thread.dart';
 
 final foldersProvider = FutureProvider<List<MailFolder>>((ref) {
   final account = ref.watch(activeAccountProvider).asData?.value;
@@ -27,21 +32,454 @@ final messageDetailProvider = FutureProvider.family<MailMessageDetail, String>((
       .getMessageDetail(accountId: account.id, id: messageId);
 });
 
+final messageThreadProvider = FutureProvider.family<MailThread, String>((
+  ref,
+  messageId,
+) {
+  final account = ref.watch(activeAccountProvider).asData?.value;
+  if (account == null) {
+    throw StateError('No active account selected.');
+  }
+  return ref
+      .watch(mailboxRepositoryProvider)
+      .getMessageThread(accountId: account.id, messageId: messageId);
+});
+
+final mailboxMessagesControllerProvider = AsyncNotifierProvider.autoDispose
+    .family<MailboxMessagesController, MailboxMessagesState, MailFolder>(
+      MailboxMessagesController.new,
+    );
+
 final folderMessagesProvider = FutureProvider.autoDispose
     .family<List<MailMessageSummary>, MailFolder>((ref, folder) async {
-      final account = await ref.watch(activeAccountProvider.future);
+      final page = await ref.watch(
+        mailboxMessagesControllerProvider(folder).future,
+      );
+      return page.messages;
+    });
+
+final mailboxConversationsControllerProvider = AsyncNotifierProvider.autoDispose
+    .family<
+      MailboxConversationsController,
+      MailboxConversationsState,
+      MailFolder
+    >(MailboxConversationsController.new);
+
+class MailboxConversationsState {
+  const MailboxConversationsState({required this.conversations});
+
+  final List<MailConversation> conversations;
+
+  MailboxConversationsState copyWith({List<MailConversation>? conversations}) {
+    return MailboxConversationsState(
+      conversations: conversations ?? this.conversations,
+    );
+  }
+}
+
+class MailboxConversationsController
+    extends AsyncNotifier<MailboxConversationsState> {
+  MailboxConversationsController(this.folder);
+
+  static const limit = 50;
+
+  final MailFolder folder;
+
+  @override
+  Future<MailboxConversationsState> build() async {
+    return _loadConversations(forceRefresh: true);
+  }
+
+  Future<void> refresh() async {
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(
+      () => _loadConversations(forceRefresh: true),
+    );
+  }
+
+  Future<MailDeleteResult> moveSelectedToTrash(List<String> messageIds) async {
+    final current = state.asData?.value;
+    if (current == null || messageIds.isEmpty) {
+      return const MailDeleteResult(movedMessageIds: [], failed: []);
+    }
+
+    final account = await ref.read(activeAccountProvider.future);
+    if (account == null) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: messageIds
+            .map(
+              (id) => MailDeleteFailure(
+                messageId: id,
+                message: 'Active account session is missing.',
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    final repository = ref.read(mailboxRepositoryProvider);
+    final results = <MailDeleteResult>[];
+    for (final messageId in messageIds) {
+      results.add(
+        await repository.moveMessageToTrash(
+          accountId: account.id,
+          messageId: messageId,
+        ),
+      );
+    }
+    final result = MailDeleteResult(
+      movedMessageIds: [
+        for (final result in results) ...result.movedMessageIds,
+      ],
+      failed: [for (final result in results) ...result.failed],
+    );
+    if (result.movedMessageIds.isNotEmpty) {
+      state = AsyncData(
+        current.copyWith(
+          conversations: _removeMessagesFromConversations(
+            current.conversations,
+            result.movedMessageIds.toSet(),
+          ),
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<MailRestoreResult> restoreSelectedToInbox(
+    List<String> messageIds,
+  ) async {
+    final current = state.asData?.value;
+    if (current == null || messageIds.isEmpty) {
+      return const MailRestoreResult(restoredMessageIds: [], failed: []);
+    }
+
+    final account = await ref.read(activeAccountProvider.future);
+    if (account == null) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: messageIds
+            .map(
+              (id) => MailRestoreFailure(
+                messageId: id,
+                message: 'Active account session is missing.',
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    final repository = ref.read(mailboxRepositoryProvider);
+    final results = <MailRestoreResult>[];
+    for (final messageId in messageIds) {
+      results.add(
+        await repository.restoreMessageToInbox(
+          accountId: account.id,
+          messageId: messageId,
+        ),
+      );
+    }
+    final result = MailRestoreResult(
+      restoredMessageIds: [
+        for (final result in results) ...result.restoredMessageIds,
+      ],
+      failed: [for (final result in results) ...result.failed],
+    );
+    if (result.restoredMessageIds.isNotEmpty) {
+      state = AsyncData(
+        current.copyWith(
+          conversations: _removeMessagesFromConversations(
+            current.conversations,
+            result.restoredMessageIds.toSet(),
+          ),
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<MailboxConversationsState> _loadConversations({
+    required bool forceRefresh,
+  }) async {
+    final account = await ref.watch(activeAccountProvider.future);
+    if (account == null) {
+      return const MailboxConversationsState(conversations: []);
+    }
+
+    final conversations = await ref
+        .watch(mailboxRepositoryProvider)
+        .getConversations(
+          accountId: account.id,
+          folder: folder,
+          limit: limit,
+          forceRefresh: forceRefresh,
+        );
+    return MailboxConversationsState(conversations: conversations);
+  }
+
+  List<MailConversation> _removeMessagesFromConversations(
+    List<MailConversation> conversations,
+    Set<String> messageIds,
+  ) {
+    return conversations
+        .map((conversation) {
+          final remainingTimeline = conversation.messages
+              .where((message) => !messageIds.contains(message.message.id))
+              .toList();
+          if (remainingTimeline.isEmpty) {
+            return null;
+          }
+          final newRoot = remainingTimeline.first.message;
+          final newReplies = remainingTimeline
+              .skip(1)
+              .map((message) => message.message)
+              .toList();
+          return MailConversation(
+            id: conversation.id,
+            messageCount: remainingTimeline.length,
+            replyCount: newReplies.length,
+            hasUnread:
+                !newRoot.isRead || newReplies.any((reply) => !reply.isRead),
+            hasAttachments:
+                newRoot.hasAttachments ||
+                newReplies.any((reply) => reply.hasAttachments),
+            hasVisibleAttachments:
+                newRoot.hasAttachments ||
+                newReplies.any((reply) => reply.hasAttachments),
+            participants: conversation.participants,
+            rootMessage: newRoot,
+            replies: newReplies,
+            latestDate: newReplies.isEmpty
+                ? newRoot.receivedAt
+                : newReplies
+                      .map((reply) => reply.receivedAt)
+                      .fold(newRoot.receivedAt, _latestDate),
+            timelineMessages: remainingTimeline,
+          );
+        })
+        .whereType<MailConversation>()
+        .toList();
+  }
+
+  DateTime _latestDate(DateTime left, DateTime right) {
+    return right.isAfter(left) ? right : left;
+  }
+}
+
+class MailboxMessagesState {
+  const MailboxMessagesState({
+    required this.messages,
+    required this.hasMore,
+    this.nextBeforeUid,
+    this.isLoadingMore = false,
+    this.loadMoreError,
+  });
+
+  final List<MailMessageSummary> messages;
+  final bool hasMore;
+  final String? nextBeforeUid;
+  final bool isLoadingMore;
+  final String? loadMoreError;
+
+  MailboxMessagesState copyWith({
+    List<MailMessageSummary>? messages,
+    bool? hasMore,
+    Object? nextBeforeUid = _unchanged,
+    bool? isLoadingMore,
+    Object? loadMoreError = _unchanged,
+  }) {
+    return MailboxMessagesState(
+      messages: messages ?? this.messages,
+      hasMore: hasMore ?? this.hasMore,
+      nextBeforeUid: nextBeforeUid == _unchanged
+          ? this.nextBeforeUid
+          : nextBeforeUid as String?,
+      isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+      loadMoreError: loadMoreError == _unchanged
+          ? this.loadMoreError
+          : loadMoreError as String?,
+    );
+  }
+}
+
+class MailboxMessagesController extends AsyncNotifier<MailboxMessagesState> {
+  MailboxMessagesController(this.folder);
+
+  static const pageSize = 50;
+
+  final MailFolder folder;
+
+  @override
+  Future<MailboxMessagesState> build() {
+    return _loadFirstPage(folder);
+  }
+
+  Future<void> refresh() async {
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(() => _loadFirstPage(folder));
+  }
+
+  Future<void> loadMore() async {
+    final current = state.asData?.value;
+    if (current == null ||
+        current.isLoadingMore ||
+        !current.hasMore ||
+        current.nextBeforeUid == null) {
+      return;
+    }
+
+    state = AsyncData(
+      current.copyWith(isLoadingMore: true, loadMoreError: null),
+    );
+
+    try {
+      final account = await ref.read(activeAccountProvider.future);
       if (account == null) {
-        return const [];
+        state = AsyncData(
+          current.copyWith(isLoadingMore: false, loadMoreError: null),
+        );
+        return;
       }
 
-      return ref
-          .watch(mailboxRepositoryProvider)
-          .getMessages(
+      final page = await ref
+          .read(mailboxRepositoryProvider)
+          .getMessagePage(
             accountId: account.id,
             folder: folder,
-            forceRefresh: true,
+            pageSize: pageSize,
+            beforeUid: current.nextBeforeUid,
           );
-    });
+      state = AsyncData(_appendPage(current, page));
+    } catch (error) {
+      state = AsyncData(
+        current.copyWith(isLoadingMore: false, loadMoreError: error.toString()),
+      );
+    }
+  }
+
+  Future<MailDeleteResult> moveSelectedToTrash(List<String> messageIds) async {
+    final current = state.asData?.value;
+    if (current == null || messageIds.isEmpty) {
+      return const MailDeleteResult(movedMessageIds: [], failed: []);
+    }
+
+    final account = await ref.read(activeAccountProvider.future);
+    if (account == null) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: messageIds
+            .map(
+              (id) => MailDeleteFailure(
+                messageId: id,
+                message: 'Active account session is missing.',
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    final result = await ref
+        .read(mailboxRepositoryProvider)
+        .moveMessagesToTrash(
+          accountId: account.id,
+          folder: folder,
+          messageIds: messageIds,
+        );
+    if (result.movedMessageIds.isNotEmpty) {
+      final movedIds = result.movedMessageIds.toSet();
+      state = AsyncData(
+        current.copyWith(
+          messages: current.messages
+              .where((message) => !movedIds.contains(message.id))
+              .toList(),
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<MailRestoreResult> restoreSelectedToInbox(
+    List<String> messageIds,
+  ) async {
+    final current = state.asData?.value;
+    if (current == null || messageIds.isEmpty) {
+      return const MailRestoreResult(restoredMessageIds: [], failed: []);
+    }
+
+    final account = await ref.read(activeAccountProvider.future);
+    if (account == null) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: messageIds
+            .map(
+              (id) => MailRestoreFailure(
+                messageId: id,
+                message: 'Active account session is missing.',
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    final result = await ref
+        .read(mailboxRepositoryProvider)
+        .restoreMessagesToInbox(
+          accountId: account.id,
+          folder: folder,
+          messageIds: messageIds,
+        );
+    if (result.restoredMessageIds.isNotEmpty) {
+      final restoredIds = result.restoredMessageIds.toSet();
+      state = AsyncData(
+        current.copyWith(
+          messages: current.messages
+              .where((message) => !restoredIds.contains(message.id))
+              .toList(),
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<MailboxMessagesState> _loadFirstPage(MailFolder folder) async {
+    final account = await ref.watch(activeAccountProvider.future);
+    if (account == null) {
+      return const MailboxMessagesState(messages: [], hasMore: false);
+    }
+
+    final page = await ref
+        .watch(mailboxRepositoryProvider)
+        .getMessagePage(
+          accountId: account.id,
+          folder: folder,
+          pageSize: pageSize,
+          forceRefresh: true,
+        );
+    return MailboxMessagesState(
+      messages: page.messages,
+      hasMore: page.hasMore,
+      nextBeforeUid: page.nextBeforeUid,
+    );
+  }
+
+  MailboxMessagesState _appendPage(
+    MailboxMessagesState current,
+    MailMessagePage page,
+  ) {
+    final existingIds = current.messages.map((message) => message.id).toSet();
+    final appended = page.messages
+        .where((message) => existingIds.add(message.id))
+        .toList();
+    return MailboxMessagesState(
+      messages: [...current.messages, ...appended],
+      hasMore: page.hasMore,
+      nextBeforeUid: page.nextBeforeUid,
+    );
+  }
+}
+
+const Object _unchanged = Object();
 
 final mailboxSearchProvider = FutureProvider.autoDispose
     .family<List<MailMessageSummary>, MailboxSearchRequest>((

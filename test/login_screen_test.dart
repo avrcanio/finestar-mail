@@ -17,15 +17,15 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Add mailbox'), findsOneWidget);
-    expect(find.text('Finestar mail preset'), findsOneWidget);
-    expect(find.text('mail.finestar.hr'), findsOneWidget);
-    expect(find.text('IMAP 993 SSL/TLS'), findsOneWidget);
-    expect(find.text('SMTP 465 SSL/TLS'), findsOneWidget);
-    expect(find.text('Full email username'), findsOneWidget);
+    expect(find.text('Finestar mail preset'), findsNothing);
+    expect(find.text('mail.finestar.hr'), findsNothing);
+    expect(find.text('IMAP 993 SSL/TLS'), findsNothing);
+    expect(find.text('SMTP 465 SSL/TLS'), findsNothing);
+    expect(find.text('Full email username'), findsNothing);
     expect(find.text('Display name'), findsOneWidget);
     expect(find.text('Email address'), findsOneWidget);
     expect(find.text('Password'), findsOneWidget);
-    expect(find.text('Test connection'), findsOneWidget);
+    expect(find.text('Test connection'), findsNothing);
     expect(find.text('Add account'), findsOneWidget);
   });
 
@@ -40,22 +40,6 @@ void main() {
 
     expect(find.text('Enter a valid email address.'), findsOneWidget);
     expect(find.text('Password is required.'), findsOneWidget);
-  });
-
-  testWidgets('test connection calls auth controller flow', (tester) async {
-    final repository = _FakeAuthRepository();
-    await tester.pumpWidget(_buildTestApp(repository));
-    await tester.pumpAndSettle();
-
-    await tester.enterText(find.byType(TextFormField).at(1), _account.email);
-    await tester.enterText(find.byType(TextFormField).at(2), 'secret');
-    await tester.ensureVisible(find.text('Test connection'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Test connection'));
-    await tester.pumpAndSettle();
-
-    expect(repository.testConnectionCalls, 1);
-    expect(find.text('Connection settings look valid.'), findsOneWidget);
   });
 
   testWidgets('add account still navigates to inbox on success', (
@@ -116,7 +100,6 @@ final _account = MailAccount(
 );
 
 class _FakeAuthRepository implements AuthRepository {
-  int testConnectionCalls = 0;
   int addAccountCalls = 0;
   MailAccount? activeAccount;
   final List<MailAccount> accounts = [];
@@ -126,14 +109,13 @@ class _FakeAuthRepository implements AuthRepository {
     required String email,
     required String displayName,
     required String password,
-    required ConnectionSettings settings,
   }) async {
     addAccountCalls++;
     final account = MailAccount(
       id: email,
       email: email,
       displayName: displayName,
-      connectionSettings: settings,
+      connectionSettings: _account.connectionSettings,
       createdAt: DateTime(2026, 4, 16),
     );
     accounts.add(account);
@@ -158,15 +140,5 @@ class _FakeAuthRepository implements AuthRepository {
   @override
   Future<void> setActiveAccount(String accountId) async {
     activeAccount = accounts.where((account) => account.id == accountId).first;
-  }
-
-  @override
-  Future<Result<void>> testConnection({
-    required String email,
-    required String password,
-    required ConnectionSettings settings,
-  }) async {
-    testConnectionCalls++;
-    return const Success(null);
   }
 }

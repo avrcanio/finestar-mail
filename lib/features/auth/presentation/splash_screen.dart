@@ -12,11 +12,12 @@ class SplashScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    ref.listen(activeAccountProvider, (previous, next) {
-      next.whenData((account) {
-        final target = account == null
-            ? AppRoute.login.path
-            : AppRoute.inbox.path;
+    final activeAccountAsync = ref.watch(activeAccountProvider);
+    activeAccountAsync.whenData((account) {
+      final target = account == null
+          ? AppRoute.login.path
+          : AppRoute.inbox.path;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
         if (context.mounted) {
           context.go(target);
         }

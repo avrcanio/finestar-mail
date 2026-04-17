@@ -1,22 +1,31 @@
 import '../../../core/result/result.dart';
 import '../../../data/local/app_database.dart';
-import '../../../data/remote/mail_connection_tester.dart';
+import '../../../data/remote/backend_mail_api_client.dart';
 import '../../../data/secure/secure_storage_service.dart';
 import '../domain/entities/connection_settings.dart';
 import '../domain/entities/mail_account.dart';
 import '../domain/repositories/auth_repository.dart';
 
+const _legacyConnectionSettings = ConnectionSettings(
+  imapHost: '',
+  imapPort: 0,
+  imapSecurity: MailSecurity.none,
+  smtpHost: '',
+  smtpPort: 0,
+  smtpSecurity: MailSecurity.none,
+);
+
 class AuthRepositoryImpl implements AuthRepository {
   AuthRepositoryImpl({
     required SecureStorageService secureStorageService,
-    required MailConnectionTester mailConnectionTester,
+    required BackendMailApiClient backendMailApiClient,
     required AppDatabase appDatabase,
   }) : _secureStorageService = secureStorageService,
-       _mailConnectionTester = mailConnectionTester,
+       _backendMailApiClient = backendMailApiClient,
        _appDatabase = appDatabase;
 
   final SecureStorageService _secureStorageService;
-  final MailConnectionTester _mailConnectionTester;
+  final BackendMailApiClient _backendMailApiClient;
   final AppDatabase _appDatabase;
 
   @override
@@ -43,13 +52,18 @@ class AuthRepositoryImpl implements AuthRepository {
       }
     }
 
-    if (activeAccount != null) {
+    if (activeAccount != null && await _hasValidBackendSession(activeAccount)) {
       return activeAccount;
     }
 
     final fallback = accounts.first;
-    await setActiveAccount(fallback.id);
-    return fallback;
+    if (await _hasValidBackendSession(fallback)) {
+      await setActiveAccount(fallback.id);
+      return fallback;
+    }
+
+    await _secureStorageService.clearActiveAccountId();
+    return null;
   }
 
   @override
@@ -68,26 +82,33 @@ class AuthRepositoryImpl implements AuthRepository {
     required String email,
     required String displayName,
     required String password,
-    required ConnectionSettings settings,
   }) async {
-    final connectionResult = await testConnection(
-      email: email,
-      password: password,
-      settings: settings,
-    );
+    final normalizedEmail = email.trim().toLowerCase();
+    BackendLoginResponse loginResponse;
+    try {
+      loginResponse = await _backendMailApiClient.login(
+        email: normalizedEmail,
+        password: password,
+      );
+    } on BackendMailApiException catch (error) {
+      return Failure<MailAccount>(error.userMessage);
+    } catch (error) {
+      return Failure<MailAccount>('Unable to sign in: $error');
+    }
 
-    if (connectionResult.isFailure) {
-      return connectionResult.when(
-        success: (_) => const Failure<MailAccount>('Unexpected sign-in state.'),
-        failure: Failure.new,
+    if (!loginResponse.authenticated || loginResponse.token.trim().isEmpty) {
+      return const Failure<MailAccount>(
+        'Backend did not return a valid session token.',
       );
     }
 
     final account = MailAccount(
-      id: email.toLowerCase(),
-      email: email,
+      id: normalizedEmail,
+      email: loginResponse.accountEmail.isEmpty
+          ? normalizedEmail
+          : loginResponse.accountEmail,
       displayName: displayName.isEmpty ? email : displayName,
-      connectionSettings: settings,
+      connectionSettings: _legacyConnectionSettings,
       createdAt: DateTime.now(),
     );
 
@@ -98,20 +119,21 @@ class AuthRepositoryImpl implements AuthRepository {
             id: account.id,
             email: account.email,
             displayName: account.displayName,
-            imapHost: settings.imapHost,
-            imapPort: settings.imapPort,
-            imapSecurity: settings.imapSecurity.name,
-            smtpHost: settings.smtpHost,
-            smtpPort: settings.smtpPort,
-            smtpSecurity: settings.smtpSecurity.name,
+            imapHost: _legacyConnectionSettings.imapHost,
+            imapPort: _legacyConnectionSettings.imapPort,
+            imapSecurity: _legacyConnectionSettings.imapSecurity.name,
+            smtpHost: _legacyConnectionSettings.smtpHost,
+            smtpPort: _legacyConnectionSettings.smtpPort,
+            smtpSecurity: _legacyConnectionSettings.smtpSecurity.name,
             createdAt: account.createdAt,
           ),
         );
 
-    await _secureStorageService.savePassword(
+    await _secureStorageService.saveAuthToken(
       accountId: account.id,
-      password: password,
+      token: loginResponse.token,
     );
+    await _secureStorageService.deletePassword(account.id);
 
     final accounts = await getAccounts();
     if (accounts.length == 1) {
@@ -140,6 +162,7 @@ class AuthRepositoryImpl implements AuthRepository {
     )..where((table) => table.id.equals(accountId))).go();
 
     await _secureStorageService.deletePassword(accountId);
+    await _secureStorageService.deleteAuthToken(accountId);
 
     final activeAccountId = await _secureStorageService.readActiveAccountId();
     if (activeAccountId == accountId) {
@@ -152,17 +175,23 @@ class AuthRepositoryImpl implements AuthRepository {
     }
   }
 
-  @override
-  Future<Result<void>> testConnection({
-    required String email,
-    required String password,
-    required ConnectionSettings settings,
-  }) {
-    return _mailConnectionTester.test(
-      email: email,
-      password: password,
-      settings: settings,
-    );
+  Future<bool> _hasValidBackendSession(MailAccount account) async {
+    final token = await _secureStorageService.readAuthToken(account.id);
+    if (token == null || token.trim().isEmpty) {
+      return false;
+    }
+    try {
+      final identity = await _backendMailApiClient.me(token: token);
+      return identity.authenticated &&
+          identity.accountEmail.toLowerCase() == account.email.toLowerCase();
+    } on BackendMailApiException catch (error) {
+      if (error.isUnauthorized) {
+        await _secureStorageService.deleteAuthToken(account.id);
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _migrateLegacyAccountIfPresent() {

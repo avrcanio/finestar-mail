@@ -1,19 +1,28 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:http/http.dart' as http;
 import 'package:logger/logger.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../data/local/app_database.dart';
-import '../data/remote/mail_connection_tester.dart';
+import '../data/remote/backend_mail_api_client.dart';
 import '../data/secure/secure_storage_service.dart';
 import '../features/attachments/data/attachment_repository_impl.dart';
 import '../features/attachments/domain/repositories/attachment_repository.dart';
+import '../features/auth/data/backend_auth_token_selector.dart';
 import '../features/auth/data/auth_repository_impl.dart';
 import '../features/auth/domain/repositories/auth_repository.dart';
 import '../features/compose/data/compose_repository_impl.dart';
 import '../features/compose/domain/repositories/compose_repository.dart';
 import '../features/mailbox/data/mailbox_repository_impl.dart';
 import '../features/mailbox/domain/repositories/mailbox_repository.dart';
-import '../features/notifications/data/push_notification_service.dart';
+import '../features/notifications/data/device_registration_service.dart';
+import '../features/notifications/data/local_notification_service.dart';
+import '../features/notifications/data/notification_mail_sync_service.dart';
+import '../features/settings/data/account_summaries_repository.dart';
 import '../features/settings/data/settings_repository_impl.dart';
+import '../features/settings/domain/entities/account_summary.dart';
 import '../features/settings/domain/repositories/settings_repository.dart';
 
 final loggerProvider = Provider<Logger>((ref) {
@@ -30,14 +39,10 @@ final secureStorageServiceProvider = Provider<SecureStorageService>((ref) {
   return SecureStorageService();
 });
 
-final mailConnectionTesterProvider = Provider<MailConnectionTester>((ref) {
-  return MailConnectionTester(ref.watch(loggerProvider));
-});
-
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
   return AuthRepositoryImpl(
     secureStorageService: ref.watch(secureStorageServiceProvider),
-    mailConnectionTester: ref.watch(mailConnectionTesterProvider),
+    backendMailApiClient: ref.watch(backendMailApiClientProvider),
     appDatabase: ref.watch(appDatabaseProvider),
   );
 });
@@ -46,6 +51,7 @@ final mailboxRepositoryProvider = Provider<MailboxRepository>((ref) {
   return MailboxRepositoryImpl(
     appDatabase: ref.watch(appDatabaseProvider),
     secureStorageService: ref.watch(secureStorageServiceProvider),
+    backendMailApiClient: ref.watch(backendMailApiClientProvider),
   );
 });
 
@@ -54,6 +60,7 @@ final composeRepositoryProvider = Provider<ComposeRepository>((ref) {
     appDatabase: ref.watch(appDatabaseProvider),
     logger: ref.watch(loggerProvider),
     secureStorageService: ref.watch(secureStorageServiceProvider),
+    backendMailApiClient: ref.watch(backendMailApiClientProvider),
   );
 });
 
@@ -63,32 +70,117 @@ final settingsRepositoryProvider = Provider<SettingsRepository>((ref) {
   );
 });
 
+final backendAuthTokenSelectorProvider = Provider<BackendAuthTokenSelector>((
+  ref,
+) {
+  return BackendAuthTokenSelector(
+    authRepository: ref.watch(authRepositoryProvider),
+    secureStorageService: ref.watch(secureStorageServiceProvider),
+  );
+});
+
+final accountSummariesRepositoryProvider = Provider<AccountSummariesRepository>(
+  (ref) {
+    return AccountSummariesRepository(
+      backendMailApiClient: ref.watch(backendMailApiClientProvider),
+      backendAuthTokenSelector: ref.watch(backendAuthTokenSelectorProvider),
+      fcmTokenLoader: ref.watch(firebaseMessagingProvider).getToken,
+      logger: ref.watch(loggerProvider),
+    );
+  },
+);
+
+final accountSummariesProvider = FutureProvider<Map<String, AccountSummary>>((
+  ref,
+) {
+  return ref.watch(accountSummariesRepositoryProvider).fetchSummariesByEmail();
+});
+
 final attachmentRepositoryProvider = Provider<AttachmentRepository>((ref) {
   return AttachmentRepositoryImpl();
 });
 
-final pushRegistrationStatusProvider =
-    NotifierProvider<PushRegistrationStatusController, PushRegistrationStatus>(
-      PushRegistrationStatusController.new,
-    );
+final httpClientProvider = Provider<http.Client>((ref) {
+  final client = http.Client();
+  ref.onDispose(client.close);
+  return client;
+});
 
-class PushRegistrationStatusController
-    extends Notifier<PushRegistrationStatus> {
-  @override
-  PushRegistrationStatus build() {
-    return PushRegistrationStatus.idle();
-  }
-
-  void setStatus(PushRegistrationStatus status) {
-    state = status;
-  }
-}
-
-final pushNotificationServiceProvider = Provider<PushNotificationService>((ref) {
-  return PushNotificationService(
-    logger: ref.watch(loggerProvider),
-    onStatusChanged: (status) {
-      ref.read(pushRegistrationStatusProvider.notifier).setStatus(status);
+final backendMailApiClientProvider = Provider<BackendMailApiClient>((ref) {
+  return BackendMailApiClient(
+    httpClient: ref.watch(httpClientProvider),
+    baseUrlLoader: () async {
+      final config = await ref.read(deviceRegistrationConfigProvider.future);
+      return config.apiBaseUrl;
     },
+  );
+});
+
+final deviceRegistrationConfigProvider =
+    FutureProvider<DeviceRegistrationConfig>((ref) {
+      return const DeviceRegistrationConfigLoader().load();
+    });
+
+final firebaseMessagingProvider = Provider<FirebaseMessaging>((ref) {
+  return FirebaseMessaging.instance;
+});
+
+final fcmTokenRefreshProvider = StreamProvider<String>((ref) {
+  return ref.watch(firebaseMessagingProvider).onTokenRefresh;
+});
+
+final fcmMessageOpenedProvider = StreamProvider<RemoteMessage>((ref) {
+  return FirebaseMessaging.onMessageOpenedApp;
+});
+
+final fcmForegroundMessageProvider = StreamProvider<RemoteMessage>((ref) {
+  return FirebaseMessaging.onMessage;
+});
+
+final flutterLocalNotificationsPluginProvider =
+    Provider<FlutterLocalNotificationsPlugin>((ref) {
+      return FlutterLocalNotificationsPlugin();
+    });
+
+final localNotificationServiceProvider = Provider<LocalNotificationService>((
+  ref,
+) {
+  return LocalNotificationService(
+    plugin: ref.watch(flutterLocalNotificationsPluginProvider),
+    logger: ref.watch(loggerProvider),
+  );
+});
+
+final notificationMailSyncServiceProvider =
+    Provider<NotificationMailSyncService>((ref) {
+      return NotificationMailSyncService(
+        activeAccountLoader: () =>
+            ref.read(authRepositoryProvider).getActiveAccount(),
+        accountsLoader: () => ref.read(authRepositoryProvider).getAccounts(),
+        mailboxRepository: ref.watch(mailboxRepositoryProvider),
+        logger: ref.watch(loggerProvider),
+      );
+    });
+
+final deviceRegistrationServiceProvider = Provider<DeviceRegistrationService>((
+  ref,
+) {
+  final messaging = ref.watch(firebaseMessagingProvider);
+  return DeviceRegistrationService(
+    config:
+        ref.watch(deviceRegistrationConfigProvider).asData?.value ??
+        DeviceRegistrationConfig.fromEnvironment(),
+    httpClient: ref.watch(httpClientProvider),
+    fcmTokenLoader: messaging.getToken,
+    authTokenLoader: ref.watch(secureStorageServiceProvider).readAuthToken,
+    permissionRequester: () async {
+      await messaging.requestPermission();
+    },
+    appVersionLoader: () async {
+      final info = await PackageInfo.fromPlatform();
+      return '${info.version}+${info.buildNumber}';
+    },
+    platform: 'android',
+    logger: ref.watch(loggerProvider),
   );
 });

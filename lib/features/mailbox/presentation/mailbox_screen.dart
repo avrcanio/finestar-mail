@@ -7,9 +7,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
 import '../../auth/domain/entities/mail_account.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../domain/entities/mail_conversation.dart';
 import '../domain/entities/mail_folder.dart';
 import '../domain/entities/mail_message_summary.dart';
 import 'mailbox_controller.dart';
@@ -28,6 +30,9 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
   Timer? _searchDebounce;
   String? _selectedFolderId;
   String _searchQuery = '';
+  final _selectedMessageIds = <String>{};
+  final _expandedFolderPaths = <String>{};
+  bool _isProcessingSelection = false;
 
   @override
   void dispose() {
@@ -40,7 +45,10 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 400), () {
       if (mounted) {
-        setState(() => _searchQuery = value.trim());
+        setState(() {
+          _searchQuery = value.trim();
+          _selectedMessageIds.clear();
+        });
       }
     });
   }
@@ -48,7 +56,134 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
   void _clearSearch() {
     _searchDebounce?.cancel();
     _searchController.clear();
-    setState(() => _searchQuery = '');
+    setState(() {
+      _searchQuery = '';
+      _selectedMessageIds.clear();
+    });
+  }
+
+  void _toggleSelectedMessage(String messageId) {
+    setState(() {
+      if (!_selectedMessageIds.add(messageId)) {
+        _selectedMessageIds.remove(messageId);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    setState(_selectedMessageIds.clear);
+  }
+
+  Future<void> _deleteSelectedMessages(MailFolder folder) async {
+    if (_selectedMessageIds.isEmpty ||
+        _isProcessingSelection ||
+        _isTrash(folder)) {
+      return;
+    }
+
+    setState(() => _isProcessingSelection = true);
+    final requestedIds = _selectedMessageIds.toList();
+    try {
+      final result = await ref
+          .read(mailboxConversationsControllerProvider(folder).notifier)
+          .moveSelectedToTrash(requestedIds);
+      if (!mounted) {
+        return;
+      }
+      final failedIds = result.failed
+          .map((failure) => failure.messageId)
+          .toSet();
+      setState(() {
+        _selectedMessageIds
+          ..clear()
+          ..addAll(failedIds);
+      });
+      final messenger = ScaffoldMessenger.of(context);
+      if (result.movedAny && result.hasFailures) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Moved ${result.movedMessageIds.length} to Trash. '
+              '${result.failed.length} failed.',
+            ),
+          ),
+        );
+      } else if (result.movedAny) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              result.movedMessageIds.length == 1
+                  ? 'Moved message to Trash.'
+                  : 'Moved ${result.movedMessageIds.length} messages to Trash.',
+            ),
+          ),
+        );
+      } else if (result.hasFailures) {
+        messenger.showSnackBar(
+          SnackBar(content: Text(result.failed.first.message)),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessingSelection = false);
+      }
+    }
+  }
+
+  Future<void> _restoreSelectedMessages(MailFolder folder) async {
+    if (_selectedMessageIds.isEmpty ||
+        _isProcessingSelection ||
+        !_isTrash(folder)) {
+      return;
+    }
+
+    setState(() => _isProcessingSelection = true);
+    final requestedIds = _selectedMessageIds.toList();
+    try {
+      final result = await ref
+          .read(mailboxConversationsControllerProvider(folder).notifier)
+          .restoreSelectedToInbox(requestedIds);
+      if (!mounted) {
+        return;
+      }
+      final failedIds = result.failed
+          .map((failure) => failure.messageId)
+          .toSet();
+      setState(() {
+        _selectedMessageIds
+          ..clear()
+          ..addAll(failedIds);
+      });
+      final messenger = ScaffoldMessenger.of(context);
+      if (result.restoredAny && result.hasFailures) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Restored ${result.restoredMessageIds.length} to INBOX. '
+              '${result.failed.length} failed.',
+            ),
+          ),
+        );
+      } else if (result.restoredAny) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              result.restoredMessageIds.length == 1
+                  ? 'Restored message to INBOX.'
+                  : 'Restored ${result.restoredMessageIds.length} messages to INBOX.',
+            ),
+          ),
+        );
+      } else if (result.hasFailures) {
+        messenger.showSnackBar(
+          SnackBar(content: Text(result.failed.first.message)),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessingSelection = false);
+      }
+    }
   }
 
   @override
@@ -62,10 +197,16 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
       key: _scaffoldKey,
       backgroundColor: const Color(0xFFF7F8FC),
       drawer: _MailboxDrawer(
+        expandedFolderPaths: _expandedFolderPaths,
+        selectedFolder: selectedFolder,
         selectedFolderId: selectedFolder?.id,
+        onFolderExpansionToggled: _toggleFolderExpansion,
         onFolderSelected: (folder) {
           _searchDebounce?.cancel();
-          setState(() => _selectedFolderId = folder.id);
+          setState(() {
+            _selectedFolderId = folder.id;
+            _selectedMessageIds.clear();
+          });
           Navigator.of(context).pop();
         },
       ),
@@ -79,15 +220,29 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
-              child: _GmailSearchBar(
-                controller: _searchController,
-                activeAccount: activeAccount,
-                isSearching: isSearching,
-                onMenuPressed: () => _scaffoldKey.currentState?.openDrawer(),
-                onChanged: _onSearchChanged,
-                onClear: _clearSearch,
-                onAvatarPressed: () => context.push(AppRoute.settings.path),
-              ),
+              child: _selectedMessageIds.isEmpty || selectedFolder == null
+                  ? _GmailSearchBar(
+                      controller: _searchController,
+                      activeAccount: activeAccount,
+                      isSearching: isSearching,
+                      onMenuPressed: () =>
+                          _scaffoldKey.currentState?.openDrawer(),
+                      onChanged: _onSearchChanged,
+                      onClear: _clearSearch,
+                      onAvatarPressed: () =>
+                          context.push(AppRoute.settings.path),
+                    )
+                  : _SelectionActionBar(
+                      count: _selectedMessageIds.length,
+                      isProcessing: _isProcessingSelection,
+                      mode: _isTrash(selectedFolder)
+                          ? _SelectionActionMode.restore
+                          : _SelectionActionMode.delete,
+                      onClose: _clearSelection,
+                      onAction: () => _isTrash(selectedFolder)
+                          ? _restoreSelectedMessages(selectedFolder)
+                          : _deleteSelectedMessages(selectedFolder),
+                    ),
             ),
             Expanded(
               child: selectedFolder == null
@@ -95,6 +250,8 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
                   : _MailboxContent(
                       folder: selectedFolder,
                       searchQuery: _searchQuery,
+                      selectedMessageIds: _selectedMessageIds,
+                      onToggleSelected: _toggleSelectedMessage,
                     ),
             ),
           ],
@@ -121,6 +278,86 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
       }
     }
     return folders.first;
+  }
+
+  void _toggleFolderExpansion(String path) {
+    setState(() {
+      if (!_expandedFolderPaths.add(path)) {
+        _expandedFolderPaths.remove(path);
+      }
+    });
+  }
+}
+
+enum _SelectionActionMode { delete, restore }
+
+class _SelectionActionBar extends StatelessWidget {
+  const _SelectionActionBar({
+    required this.count,
+    required this.isProcessing,
+    required this.mode,
+    required this.onClose,
+    required this.onAction,
+  });
+
+  final int count;
+  final bool isProcessing;
+  final _SelectionActionMode mode;
+  final VoidCallback onClose;
+  final VoidCallback onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return Material(
+      elevation: 2,
+      shadowColor: Colors.black.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(28),
+      color: Colors.white,
+      child: SizedBox(
+        height: 56,
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Clear selection',
+              onPressed: isProcessing ? null : onClose,
+              icon: const Icon(Icons.close),
+            ),
+            Expanded(
+              child: Text(
+                '$count selected',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            if (isProcessing)
+              const Padding(
+                padding: EdgeInsets.only(right: 18),
+                child: SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2.5),
+                ),
+              )
+            else
+              IconButton(
+                tooltip: mode == _SelectionActionMode.restore
+                    ? 'Restore selected to INBOX'
+                    : 'Move selected to Trash',
+                onPressed: onAction,
+                icon: Icon(
+                  mode == _SelectionActionMode.restore
+                      ? Icons.restore_from_trash_outlined
+                      : Icons.delete_outline,
+                ),
+              ),
+            const SizedBox(width: 8),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -182,17 +419,20 @@ class _GmailSearchBar extends StatelessWidget {
               ),
             Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: InkWell(
-                customBorder: const CircleBorder(),
-                onTap: onAvatarPressed,
-                child: CircleAvatar(
-                  radius: 18,
-                  backgroundColor: Theme.of(context).colorScheme.primary,
-                  child: Text(
-                    initials,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
+              child: Tooltip(
+                message: 'Manage account',
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: onAvatarPressed,
+                  child: CircleAvatar(
+                    radius: 18,
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    child: Text(
+                      initials,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ),
@@ -225,11 +465,17 @@ class _GmailSearchBar extends StatelessWidget {
 
 class _MailboxDrawer extends ConsumerWidget {
   const _MailboxDrawer({
+    required this.expandedFolderPaths,
+    required this.selectedFolder,
     required this.selectedFolderId,
+    required this.onFolderExpansionToggled,
     required this.onFolderSelected,
   });
 
+  final Set<String> expandedFolderPaths;
+  final MailFolder? selectedFolder;
   final String? selectedFolderId;
+  final ValueChanged<String> onFolderExpansionToggled;
   final ValueChanged<MailFolder> onFolderSelected;
 
   @override
@@ -244,26 +490,26 @@ class _MailboxDrawer extends ConsumerWidget {
           children: [
             foldersAsync.when(
               data: (folders) {
-                final sortedFolders = _sortFolders(folders);
-                if (sortedFolders.isEmpty) {
+                final tree = _buildFolderTree(folders);
+                if (tree.isEmpty) {
                   return const ListTile(
                     leading: Icon(Icons.folder_off_outlined),
                     title: Text('No folders found'),
                   );
                 }
 
+                final effectiveExpandedPaths = {
+                  ...expandedFolderPaths,
+                  ..._selectedAncestorPaths(selectedFolder),
+                };
                 return Column(
                   children: [
-                    for (final folder in sortedFolders)
-                      NavigationDrawerDestination(
-                        icon: Icon(_folderIcon(folder)),
-                        selectedIcon: Icon(_folderIcon(folder)),
-                        label: Text(_folderLabel(folder)),
-                      )._asListTile(
-                        selected:
-                            selectedFolderId == folder.id ||
-                            (selectedFolderId == null && _isInbox(folder)),
-                        onTap: () => onFolderSelected(folder),
+                    for (final node in tree)
+                      ..._buildFolderRows(
+                        context: context,
+                        node: node,
+                        depth: 0,
+                        expandedPaths: effectiveExpandedPaths,
                       ),
                   ],
                 );
@@ -285,64 +531,331 @@ class _MailboxDrawer extends ConsumerWidget {
       ),
     );
   }
+
+  List<Widget> _buildFolderRows({
+    required BuildContext context,
+    required _FolderTreeNode node,
+    required int depth,
+    required Set<String> expandedPaths,
+  }) {
+    final expanded = expandedPaths.contains(node.path);
+    return [
+      _FolderDrawerTile(
+        node: node,
+        depth: depth,
+        selected: _isSelected(node.folder),
+        expanded: expanded,
+        onExpandTap: node.children.isNotEmpty
+            ? () => onFolderExpansionToggled(node.path)
+            : null,
+        onOpenTap: node.folder != null && node.folder!.selectable
+            ? () => onFolderSelected(node.folder!)
+            : node.children.isNotEmpty
+            ? () => onFolderExpansionToggled(node.path)
+            : null,
+      ),
+      if (expanded)
+        for (final child in node.children)
+          ..._buildFolderRows(
+            context: context,
+            node: child,
+            depth: depth + 1,
+            expandedPaths: expandedPaths,
+          ),
+    ];
+  }
+
+  bool _isSelected(MailFolder? folder) {
+    if (folder == null) {
+      return false;
+    }
+    return selectedFolderId == folder.id ||
+        (selectedFolderId == null && _isInbox(folder));
+  }
 }
 
-extension on NavigationDrawerDestination {
-  Widget _asListTile({required bool selected, required VoidCallback onTap}) {
-    final label = this.label;
+class _FolderDrawerTile extends StatelessWidget {
+  const _FolderDrawerTile({
+    required this.node,
+    required this.depth,
+    required this.selected,
+    required this.expanded,
+    required this.onExpandTap,
+    required this.onOpenTap,
+  });
 
+  final _FolderTreeNode node;
+  final int depth;
+  final bool selected;
+  final bool expanded;
+  final VoidCallback? onExpandTap;
+  final VoidCallback? onOpenTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasChildren = node.children.isNotEmpty;
+    final primaryColor = selected
+        ? const Color(0xFF153B52)
+        : const Color(0xFF202124);
     return ListTile(
       selected: selected,
-      leading: IconTheme(
-        data: IconThemeData(
-          color: selected ? const Color(0xFF153B52) : const Color(0xFF5D636B),
-          size: 24,
-        ),
-        child: selected && selectedIcon != null ? selectedIcon! : icon,
+      enabled: onOpenTap != null,
+      leading: Icon(
+        hasChildren
+            ? (expanded ? Icons.folder_open_outlined : Icons.folder_outlined)
+            : _folderIcon(node.folder!),
+        color: selected ? const Color(0xFF153B52) : const Color(0xFF5D636B),
+        size: 24,
       ),
-      title: Builder(
-        builder: (context) => DefaultTextStyle.merge(
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-            color: selected ? const Color(0xFF153B52) : const Color(0xFF202124),
-            fontSize: 16,
-            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-            letterSpacing: .35,
-          ),
-          child: label,
+      title: Text(
+        node.label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+          color: primaryColor,
+          fontSize: 16,
+          fontWeight: selected || hasChildren
+              ? FontWeight.w700
+              : FontWeight.w500,
+          letterSpacing: .35,
         ),
       ),
-      onTap: onTap,
+      trailing: hasChildren
+          ? IconButton(
+              tooltip: expanded ? 'Collapse folder' : 'Expand folder',
+              onPressed: onExpandTap,
+              icon: Icon(
+                expanded ? Icons.expand_less : Icons.expand_more,
+                color: const Color(0xFF5D636B),
+              ),
+            )
+          : null,
+      onTap: onOpenTap,
       selectedTileColor: const Color(0xFFE8EFF8),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
       minTileHeight: 56,
       horizontalTitleGap: 18,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+      contentPadding: EdgeInsets.only(left: 24 + depth * 22, right: 24),
     );
   }
 }
 
-class _MailboxContent extends ConsumerWidget {
-  const _MailboxContent({required this.folder, required this.searchQuery});
+class _FolderTreeNode {
+  _FolderTreeNode({required this.path, required this.label, this.folder});
+
+  final String path;
+  final String label;
+  MailFolder? folder;
+  final children = <_FolderTreeNode>[];
+}
+
+List<_FolderTreeNode> _buildFolderTree(List<MailFolder> folders) {
+  final byPath = <String, _FolderTreeNode>{};
+  final roots = <_FolderTreeNode>[];
+
+  _FolderTreeNode ensureNode(String path, {MailFolder? folder}) {
+    final existing = byPath[path];
+    if (existing != null) {
+      if (folder != null) {
+        existing.folder = folder;
+      }
+      return existing;
+    }
+    final node = _FolderTreeNode(
+      path: path,
+      label: folder == null ? _pathLabel(path) : _folderLabel(folder),
+      folder: folder,
+    );
+    byPath[path] = node;
+    return node;
+  }
+
+  for (final folder in folders) {
+    ensureNode(folder.path, folder: folder);
+  }
+
+  for (final folder in folders) {
+    final parentPath = _folderParentPath(folder);
+    if (parentPath == null) {
+      continue;
+    }
+    ensureNode(parentPath);
+  }
+
+  final nodes = byPath.values.toList();
+  for (final node in nodes) {
+    final parentPath = node.folder == null
+        ? _pathParentPath(node.path)
+        : _folderParentPath(node.folder!);
+    final parent = parentPath == null ? null : byPath[parentPath];
+    if (parent == null || parent == node) {
+      roots.add(node);
+    } else if (!parent.children.contains(node)) {
+      parent.children.add(node);
+    }
+  }
+
+  void sortNodes(List<_FolderTreeNode> nodes) {
+    nodes.sort(_compareFolderNodes);
+    for (final node in nodes) {
+      sortNodes(node.children);
+    }
+  }
+
+  sortNodes(roots);
+  return roots;
+}
+
+int _compareFolderNodes(_FolderTreeNode left, _FolderTreeNode right) {
+  final leftRole = left.folder == null
+      ? _FolderRole.custom
+      : _folderRole(left.folder!);
+  final rightRole = right.folder == null
+      ? _FolderRole.custom
+      : _folderRole(right.folder!);
+  final roleComparison = _roleRank(leftRole).compareTo(_roleRank(rightRole));
+  if (roleComparison != 0) {
+    return roleComparison;
+  }
+  return left.label.toLowerCase().compareTo(right.label.toLowerCase());
+}
+
+Set<String> _selectedAncestorPaths(MailFolder? selectedFolder) {
+  if (selectedFolder == null) {
+    return const {};
+  }
+  final ancestors = <String>{};
+  var parentPath = _folderParentPath(selectedFolder);
+  while (parentPath != null && ancestors.add(parentPath)) {
+    parentPath = _pathParentPath(parentPath);
+  }
+  return ancestors;
+}
+
+String? _folderParentPath(MailFolder folder) {
+  final parentPath = folder.parentPath?.trim();
+  if (parentPath != null && parentPath.isNotEmpty) {
+    return parentPath;
+  }
+  return _pathParentPath(folder.path);
+}
+
+String? _pathParentPath(String path) {
+  final separator = _folderSeparator(path);
+  if (separator == null) {
+    return null;
+  }
+  final index = path.lastIndexOf(separator);
+  if (index <= 0) {
+    return null;
+  }
+  return path.substring(0, index);
+}
+
+String? _folderSeparator(String path) {
+  if (path.contains('/')) {
+    return '/';
+  }
+  if (path.contains('.')) {
+    return '.';
+  }
+  return null;
+}
+
+String _pathLabel(String path) {
+  final separator = _folderSeparator(path);
+  if (separator == null) {
+    return path;
+  }
+  final segments = path
+      .split(separator)
+      .where((segment) => segment.trim().isNotEmpty)
+      .toList();
+  return segments.isEmpty ? path : segments.last;
+}
+
+String _folderLabel(MailFolder folder) {
+  if (_isInbox(folder)) {
+    return 'Inbox';
+  }
+  final displayName = folder.displayName?.trim();
+  if (displayName != null && displayName.isNotEmpty) {
+    return displayName;
+  }
+  if (folder.depth != null && folder.depth! > 0) {
+    return _pathLabel(folder.path);
+  }
+  final parentPath = folder.parentPath?.trim();
+  if (parentPath != null && parentPath.isNotEmpty) {
+    return _pathLabel(folder.path);
+  }
+  if (_folderParentPath(folder) != null) {
+    return _pathLabel(folder.path);
+  }
+  return folder.name.trim().isEmpty ? folder.path : folder.name;
+}
+
+class _MailboxContent extends ConsumerStatefulWidget {
+  const _MailboxContent({
+    required this.folder,
+    required this.searchQuery,
+    required this.selectedMessageIds,
+    required this.onToggleSelected,
+  });
 
   final MailFolder folder;
   final String searchQuery;
+  final Set<String> selectedMessageIds;
+  final ValueChanged<String> onToggleSelected;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_MailboxContent> createState() => _MailboxContentState();
+}
+
+class _MailboxContentState extends ConsumerState<_MailboxContent> {
+  final _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_maybeLoadMore);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_maybeLoadMore);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _maybeLoadMore() {
+    return;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final folder = widget.folder;
+    final searchQuery = widget.searchQuery;
     final isSearching = searchQuery.isNotEmpty;
     final searchRequest = MailboxSearchRequest(
       folder: folder,
       query: searchQuery,
     );
-    final messagesAsync = isSearching
+    final searchAsync = isSearching
         ? ref.watch(mailboxSearchProvider(searchRequest))
-        : ref.watch(folderMessagesProvider(folder));
+        : null;
+    final conversationsAsync = isSearching
+        ? null
+        : ref.watch(mailboxConversationsControllerProvider(folder));
 
     return RefreshIndicator(
       onRefresh: () => isSearching
           ? ref.refresh(mailboxSearchProvider(searchRequest).future)
-          : ref.refresh(folderMessagesProvider(folder).future),
+          : ref
+                .read(mailboxConversationsControllerProvider(folder).notifier)
+                .refresh(),
       child: ListView(
+        controller: _scrollController,
         padding: const EdgeInsets.fromLTRB(14, 8, 14, 96),
         children: [
           if (isSearching)
@@ -353,24 +866,49 @@ class _MailboxContent extends ConsumerWidget {
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
-          messagesAsync.when(
-            data: (messages) {
-              if (messages.isEmpty) {
-                return EmptyStateView(
-                  title: isSearching ? 'No matching mail' : 'No messages yet',
-                  message: isSearching
-                      ? 'Try another keyword or clear the search.'
-                      : 'Once ${_folderLabel(folder)} syncs, messages will appear here.',
+          (isSearching ? searchAsync! : conversationsAsync!).when(
+            data: (data) {
+              if (isSearching) {
+                final visibleMessages = data as List<MailMessageSummary>;
+                if (visibleMessages.isEmpty) {
+                  return EmptyStateView(
+                    title: 'No matching mail',
+                    message: 'Try another keyword or clear the search.',
+                  );
+                }
+                return _MessageList(
+                  messages: visibleMessages,
+                  folder: folder,
+                  selectedMessageIds: widget.selectedMessageIds,
+                  selectionEnabled: false,
+                  onToggleSelected: widget.onToggleSelected,
                 );
               }
 
-              return _MessageList(messages: messages);
+              final conversations =
+                  (data as MailboxConversationsState).conversations;
+              if (conversations.isEmpty) {
+                return EmptyStateView(
+                  title: 'No messages yet',
+                  message:
+                      'Once ${_folderLabel(folder)} syncs, messages will appear here.',
+                );
+              }
+
+              return _ConversationList(
+                conversations: conversations,
+                folder: folder,
+                selectedMessageIds: widget.selectedMessageIds,
+                onToggleSelected: widget.onToggleSelected,
+              );
             },
             error: (error, stackTrace) => ErrorStateView(
               message: error.toString(),
               onRetry: () => isSearching
                   ? ref.invalidate(mailboxSearchProvider(searchRequest))
-                  : ref.invalidate(folderMessagesProvider(folder)),
+                  : ref.invalidate(
+                      mailboxConversationsControllerProvider(folder),
+                    ),
             ),
             loading: () => const Center(child: CircularProgressIndicator()),
           ),
@@ -380,100 +918,444 @@ class _MailboxContent extends ConsumerWidget {
   }
 }
 
-class _MessageList extends StatelessWidget {
-  const _MessageList({required this.messages});
+class _ConversationList extends ConsumerWidget {
+  const _ConversationList({
+    required this.conversations,
+    required this.folder,
+    required this.selectedMessageIds,
+    required this.onToggleSelected,
+  });
 
-  final List<MailMessageSummary> messages;
+  final List<MailConversation> conversations;
+  final MailFolder folder;
+  final Set<String> selectedMessageIds;
+  final ValueChanged<String> onToggleSelected;
 
   @override
-  Widget build(BuildContext context) {
-    final formatter = DateFormat('MMM d');
-
+  Widget build(BuildContext context, WidgetRef ref) {
     return Column(
-      children: messages
-          .map(
-            (message) => Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: SectionCard(
-                padding: const EdgeInsets.all(0),
-                child: ListTile(
-                  onTap: () => context.push(
-                    AppRoute.messageDetail.path.replaceFirst(':id', message.id),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 10,
-                  ),
-                  leading: CircleAvatar(
-                    backgroundColor: const Color(0xFFE8EFF8),
-                    child: Text(
-                      message.sender.characters.first.toUpperCase(),
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  title: Text(
-                    message.subject,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: message.isRead
-                          ? FontWeight.w500
-                          : FontWeight.w800,
-                    ),
-                  ),
-                  subtitle: Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      '${message.sender}\n${message.preview}',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  trailing: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(formatter.format(message.receivedAt)),
-                      if (message.hasAttachments)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 6),
-                          child: Icon(Icons.attach_file, size: 16),
+      children: [
+        for (final conversation in conversations)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: SectionCard(
+              color: conversation.messages.any(
+                    (message) => selectedMessageIds.contains(message.message.id),
+                  )
+                  ? const Color(0xFFD7EAFE)
+                  : conversation.hasUnread
+                  ? const Color(0xFFEAF4FF)
+                  : Colors.white,
+              padding: const EdgeInsets.all(0),
+              child: Column(
+                children: [
+                  for (
+                    var index = 0;
+                    index < conversation.messages.length;
+                    index++
+                  )
+                    if (index == 0)
+                      _MessageListTile(
+                        message: conversation.messages[index].message,
+                        folder: folder,
+                        selected: selectedMessageIds.contains(
+                          conversation.messages[index].message.id,
                         ),
-                    ],
-                  ),
-                  isThreeLine: true,
-                ),
+                        selectionEnabled: true,
+                        selectionActive: selectedMessageIds.isNotEmpty,
+                        onToggleSelected: onToggleSelected,
+                        onShowActions: _showMessageActions,
+                        hasAttachments: conversation.hasVisibleAttachments,
+                        isUnread: conversation.hasUnread,
+                        isImportant:
+                            conversation.messages[index].message.isImportant,
+                        isPinned: conversation.messages[index].message.isPinned,
+                        replyCount: conversation.replyCount,
+                        direction: conversation.messages[index].direction,
+                      )
+                    else
+                      _ThreadReplyRow(
+                        isLast: index == conversation.messages.length - 1,
+                        child: _MessageListTile(
+                          message: conversation.messages[index].message,
+                          folder: folder,
+                          selected: selectedMessageIds.contains(
+                            conversation.messages[index].message.id,
+                          ),
+                          selectionEnabled: true,
+                          selectionActive: selectedMessageIds.isNotEmpty,
+                          onToggleSelected: onToggleSelected,
+                          onShowActions: _showMessageActions,
+                          direction: conversation.messages[index].direction,
+                        ),
+                      ),
+                ],
               ),
             ),
-          )
-          .toList(),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _showMessageActions({
+    required BuildContext context,
+    required WidgetRef ref,
+    required MailMessageSummary message,
+    required MailFolder folder,
+  }) async {
+    await showMessageActions(
+      context: context,
+      ref: ref,
+      message: message,
+      folder: folder,
     );
   }
 }
 
-enum _FolderRole { inbox, sent, drafts, trash, junk, archive, custom }
+class _ThreadReplyRow extends StatelessWidget {
+  const _ThreadReplyRow({required this.isLast, required this.child});
 
-List<MailFolder> _sortFolders(List<MailFolder> folders) {
-  final sortedFolders = [...folders];
-  sortedFolders.sort((left, right) {
-    final roleComparison = _roleRank(
-      _folderRole(left),
-    ).compareTo(_roleRank(_folderRole(right)));
-    if (roleComparison != 0) {
-      return roleComparison;
-    }
-    return _folderLabel(
-      left,
-    ).toLowerCase().compareTo(_folderLabel(right).toLowerCase());
-  });
-  return sortedFolders;
+  final bool isLast;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 42,
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: Container(
+              width: 2,
+              height: isLast ? 58 : 92,
+              color: const Color(0xFFDADCE0),
+            ),
+          ),
+        ),
+        Expanded(child: child),
+      ],
+    );
+  }
 }
 
-String _folderLabel(MailFolder folder) =>
-    folder.name.trim().isEmpty ? folder.path : folder.name;
+class _MessageList extends ConsumerWidget {
+  const _MessageList({
+    required this.messages,
+    required this.folder,
+    required this.selectedMessageIds,
+    required this.selectionEnabled,
+    required this.onToggleSelected,
+  });
+
+  final List<MailMessageSummary> messages;
+  final MailFolder folder;
+  final Set<String> selectedMessageIds;
+  final bool selectionEnabled;
+  final ValueChanged<String> onToggleSelected;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Column(
+      children: messages.map((message) {
+        final selected = selectedMessageIds.contains(message.id);
+        final selectionActive = selectedMessageIds.isNotEmpty;
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: SectionCard(
+            color: selected
+                ? const Color(0xFFD7EAFE)
+                : message.isRead
+                ? Colors.white
+                : const Color(0xFFEAF4FF),
+            padding: const EdgeInsets.all(0),
+            child: _MessageListTile(
+              message: message,
+              folder: folder,
+              selected: selected,
+              selectionEnabled: selectionEnabled,
+              selectionActive: selectionActive,
+              onToggleSelected: onToggleSelected,
+              onShowActions: _showMessageActions,
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Future<void> _showMessageActions({
+    required BuildContext context,
+    required WidgetRef ref,
+    required MailMessageSummary message,
+    required MailFolder folder,
+  }) async {
+    await showMessageActions(
+      context: context,
+      ref: ref,
+      message: message,
+      folder: folder,
+    );
+  }
+}
+
+class _MessageListTile extends StatelessWidget {
+  const _MessageListTile({
+    required this.message,
+    required this.folder,
+    required this.selected,
+    required this.selectionEnabled,
+    required this.selectionActive,
+    required this.onToggleSelected,
+    required this.onShowActions,
+    this.hasAttachments,
+    this.isUnread,
+    this.isImportant,
+    this.isPinned,
+    this.replyCount = 0,
+    this.direction = MailConversationDirection.inbound,
+  });
+
+  final MailMessageSummary message;
+  final MailFolder folder;
+  final bool selected;
+  final bool selectionEnabled;
+  final bool selectionActive;
+  final ValueChanged<String> onToggleSelected;
+  final Future<void> Function({
+    required BuildContext context,
+    required WidgetRef ref,
+    required MailMessageSummary message,
+    required MailFolder folder,
+  })
+  onShowActions;
+  final bool? hasAttachments;
+  final bool? isUnread;
+  final bool? isImportant;
+  final bool? isPinned;
+  final int replyCount;
+  final MailConversationDirection direction;
+
+  @override
+  Widget build(BuildContext context) {
+    final formatter = DateFormat('MMM d');
+    final effectiveUnread = isUnread ?? !message.isRead;
+    final effectiveImportant = isImportant ?? message.isImportant;
+    final effectivePinned = isPinned ?? message.isPinned;
+    final effectiveHasAttachments = hasAttachments ?? message.hasAttachments;
+    final isOutbound = direction == MailConversationDirection.outbound;
+
+    return Consumer(
+      builder: (context, ref, child) {
+        return ListTile(
+          onLongPress: () => onShowActions(
+            context: context,
+            ref: ref,
+            message: message,
+            folder: folder,
+          ),
+          onTap: selectionActive && selectionEnabled
+              ? () => onToggleSelected(message.id)
+              : () => context.push(
+                  AppRoute.messageDetail.path.replaceFirst(':id', message.id),
+                ),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 10,
+          ),
+          leading: Tooltip(
+            message: 'Select message',
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: selectionEnabled
+                  ? () => onToggleSelected(message.id)
+                  : null,
+              child: CircleAvatar(
+                backgroundColor: selected
+                    ? Theme.of(context).colorScheme.primary
+                    : const Color(0xFFE8EFF8),
+                child: selected
+                    ? const Icon(Icons.check, color: Colors.white, size: 20)
+                    : Text(
+                        _senderInitial(message.sender),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+              ),
+            ),
+          ),
+          title: Row(
+            children: [
+              if (isOutbound) ...[
+                const Icon(Icons.send_outlined, size: 15),
+                const SizedBox(width: 5),
+                Text(
+                  'Sent',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: const Color(0xFF2563A8),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              Expanded(
+                child: Text(
+                  message.subject,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: effectiveUnread
+                        ? FontWeight.w800
+                        : FontWeight.w500,
+                  ),
+                ),
+              ),
+              if (replyCount > 0) ...[
+                const SizedBox(width: 8),
+                Text(
+                  '$replyCount replies',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: const Color(0xFF5F6368),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              '${message.sender}\n${message.preview}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          trailing: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(formatter.format(message.receivedAt)),
+              const SizedBox(height: 6),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (effectiveImportant)
+                    const Icon(Icons.error, size: 16, color: Color(0xFFD93025)),
+                  if (effectivePinned)
+                    const Padding(
+                      padding: EdgeInsets.only(left: 4),
+                      child: Icon(
+                        Icons.push_pin,
+                        size: 16,
+                        color: Color(0xFF153B52),
+                      ),
+                    ),
+                  if (effectiveHasAttachments)
+                    const Padding(
+                      padding: EdgeInsets.only(left: 4),
+                      child: Icon(Icons.attach_file, size: 16),
+                    ),
+                ],
+              ),
+            ],
+          ),
+          isThreeLine: true,
+        );
+      },
+    );
+  }
+
+  String _senderInitial(String sender) {
+    final trimmed = sender.trim();
+    if (trimmed.isEmpty) {
+      return '?';
+    }
+    return trimmed.characters.first.toUpperCase();
+  }
+}
+
+Future<void> showMessageActions({
+  required BuildContext context,
+  required WidgetRef ref,
+  required MailMessageSummary message,
+  required MailFolder folder,
+}) async {
+  final account = ref.read(activeAccountProvider).asData?.value;
+  if (account == null) {
+    return;
+  }
+
+  Future<void> apply(Future<void> Function() action) async {
+    Navigator.of(context).pop();
+    await action();
+    ref.invalidate(mailboxConversationsControllerProvider(folder));
+    ref.invalidate(mailboxMessagesControllerProvider(folder));
+  }
+
+  await showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) {
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(
+                message.isRead
+                    ? Icons.mark_email_unread_outlined
+                    : Icons.mark_email_read_outlined,
+              ),
+              title: Text(message.isRead ? 'Mark as unread' : 'Mark as read'),
+              onTap: () => apply(
+                () => ref
+                    .read(mailboxRepositoryProvider)
+                    .setMessageRead(
+                      accountId: account.id,
+                      messageId: message.id,
+                      isRead: !message.isRead,
+                    ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.error_outline),
+              title: Text(
+                message.isImportant ? 'Remove important' : 'Mark important',
+              ),
+              onTap: () => apply(
+                () => ref
+                    .read(mailboxRepositoryProvider)
+                    .setMessageImportant(
+                      accountId: account.id,
+                      messageId: message.id,
+                      isImportant: !message.isImportant,
+                    ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.push_pin_outlined),
+              title: Text(message.isPinned ? 'Unpin' : 'Pin to top'),
+              onTap: () => apply(
+                () => ref
+                    .read(mailboxRepositoryProvider)
+                    .setMessagePinned(
+                      accountId: account.id,
+                      messageId: message.id,
+                      isPinned: !message.isPinned,
+                    ),
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+enum _FolderRole { inbox, sent, drafts, trash, junk, archive, custom }
 
 IconData _folderIcon(MailFolder folder) {
   switch (_folderRole(folder)) {
@@ -495,6 +1377,8 @@ IconData _folderIcon(MailFolder folder) {
 }
 
 bool _isInbox(MailFolder folder) => _folderRole(folder) == _FolderRole.inbox;
+
+bool _isTrash(MailFolder folder) => _folderRole(folder) == _FolderRole.trash;
 
 _FolderRole _folderRole(MailFolder folder) {
   final normalizedPath = folder.path.trim().toLowerCase();

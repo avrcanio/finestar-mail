@@ -6,6 +6,7 @@ import 'package:finestar_mail/features/auth/domain/entities/connection_settings.
 import 'package:finestar_mail/features/auth/domain/entities/mail_account.dart';
 import 'package:finestar_mail/features/auth/presentation/auth_controller.dart';
 import 'package:finestar_mail/features/compose/domain/entities/outgoing_message.dart';
+import 'package:finestar_mail/features/compose/domain/entities/reply_context.dart';
 import 'package:finestar_mail/features/compose/domain/repositories/compose_repository.dart';
 import 'package:finestar_mail/features/compose/presentation/compose_controller.dart';
 import 'package:finestar_mail/features/compose/presentation/compose_screen.dart';
@@ -73,6 +74,25 @@ void main() {
     expect(find.text('Bcc'), findsOneWidget);
   });
 
+  testWidgets('reply context prefills recipients, subject, and quoted text', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_buildTestApp(replyContext: _replyContext));
+    await tester.pumpAndSettle();
+
+    expect(find.text('client@finestar.hr'), findsOneWidget);
+    expect(find.text('Re: Project update'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is EditableText &&
+            widget.controller.text.contains('On Thu, Apr 16, 2026') &&
+            widget.controller.text.contains('> Original body'),
+      ),
+      findsOneWidget,
+    );
+  });
+
   test('compose controller adds, removes, and sends attachments', () async {
     final composeRepository = _FakeComposeRepository();
     final container = ProviderContainer(
@@ -105,25 +125,96 @@ void main() {
       bcc: const [],
       subject: 'Photo',
       body: 'Attached.',
+      replyContext: _replyContext,
     );
 
     expect(
       composeRepository.lastMessage?.attachments.single.fileName,
       'photo.jpg',
     );
+    expect(composeRepository.lastMessage?.replyContext?.targetMessageId, 'm1');
+  });
+
+  test(
+    'compose controller sends forwarded backend-owned attachments by id',
+    () async {
+      final composeRepository = _FakeComposeRepository();
+      final container = ProviderContainer(
+        overrides: [
+          activeAccountProvider.overrideWith((ref) async => _account),
+          attachmentRepositoryProvider.overrideWith(
+            (ref) => _FakeAttachmentRepository(),
+          ),
+          composeRepositoryProvider.overrideWith((ref) => composeRepository),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      await container.read(composeControllerProvider.future);
+      final controller = container.read(composeControllerProvider.notifier);
+      controller.setForwardedAttachments(
+        _forwardReplyContext.forwardedAttachments,
+      );
+      controller.removeAttachment('forwarded:pdf_2');
+      await controller.pickFiles();
+
+      await controller.send(
+        to: const ['client@finestar.hr'],
+        cc: const [],
+        bcc: const [],
+        subject: 'Fwd: Project update',
+        body: 'Forwarding.',
+        replyContext: _forwardReplyContext,
+      );
+
+      expect(
+        composeRepository.lastMessage?.attachments.single.fileName,
+        'proposal.pdf',
+      );
+      expect(
+        composeRepository.lastMessage?.forwardSourceMessage?.folder,
+        'INBOX',
+      );
+      expect(composeRepository.lastMessage?.forwardSourceMessage?.uid, '42');
+      expect(
+        composeRepository.lastMessage?.forwardSourceMessage?.attachmentIds,
+        ['pdf_1'],
+      );
+    },
+  );
+
+  testWidgets('forward compose shows forwarded attachment chips', (
+    tester,
+  ) async {
+    final composeRepository = _FakeComposeRepository();
+    await tester.pumpWidget(
+      _buildTestApp(
+        replyContext: _forwardReplyContext,
+        composeRepository: composeRepository,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('notice.pdf'), findsOneWidget);
+    expect(find.text('hidden-logo.png'), findsNothing);
   });
 }
 
-Widget _buildTestApp() {
+Widget _buildTestApp({
+  ReplyContext? replyContext,
+  _FakeComposeRepository? composeRepository,
+}) {
   return ProviderScope(
     overrides: [
       activeAccountProvider.overrideWith((ref) async => _account),
       attachmentRepositoryProvider.overrideWith(
         (ref) => _FakeAttachmentRepository(),
       ),
-      composeRepositoryProvider.overrideWith((ref) => _FakeComposeRepository()),
+      composeRepositoryProvider.overrideWith(
+        (ref) => composeRepository ?? _FakeComposeRepository(),
+      ),
     ],
-    child: const MaterialApp(home: ComposeScreen()),
+    child: MaterialApp(home: ComposeScreen(replyContext: replyContext)),
   );
 }
 
@@ -140,6 +231,48 @@ final _account = MailAccount(
     smtpSecurity: MailSecurity.sslTls,
   ),
   createdAt: DateTime(2026, 4, 16),
+);
+
+final _replyContext = ReplyContext(
+  messageId: 'thread-root',
+  targetMessageId: 'm1',
+  subject: 'Project update',
+  action: ReplyAction.reply,
+  recipients: const ['client@finestar.hr'],
+  originalSender: 'client@finestar.hr',
+  originalReceivedAt: DateTime(2026, 4, 16, 8, 30),
+  originalBody: 'Original body',
+  originalMessageIdHeader: '<m1@finestar.hr>',
+  originalReferencesHeader: '<root@finestar.hr>',
+);
+
+final _forwardReplyContext = ReplyContext(
+  messageId: 'thread-root',
+  targetMessageId: 'm1',
+  subject: 'Project update',
+  action: ReplyAction.forward,
+  recipients: const [],
+  originalSender: 'client@finestar.hr',
+  originalReceivedAt: DateTime(2026, 4, 16, 8, 30),
+  originalBody: 'Original body',
+  originalMessageIdHeader: '<m1@finestar.hr>',
+  originalReferencesHeader: '<root@finestar.hr>',
+  forwardSourceFolder: 'INBOX',
+  forwardSourceUid: '42',
+  forwardedAttachments: const [
+    ForwardedAttachmentRef(
+      attachmentId: 'pdf_1',
+      fileName: 'notice.pdf',
+      sizeBytes: 10,
+      mimeType: 'application/pdf',
+    ),
+    ForwardedAttachmentRef(
+      attachmentId: 'pdf_2',
+      fileName: 'terms.pdf',
+      sizeBytes: 11,
+      mimeType: 'application/pdf',
+    ),
+  ],
 );
 
 class _FakeAttachmentRepository implements AttachmentRepository {

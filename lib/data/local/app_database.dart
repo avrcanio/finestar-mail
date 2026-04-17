@@ -43,8 +43,11 @@ class MessageSummaries extends Table {
   TextColumn get preview => text()();
   DateTimeColumn get receivedAt => dateTime()();
   BoolColumn get isRead => boolean()();
+  BoolColumn get pendingReadState => boolean().nullable()();
   BoolColumn get hasAttachments => boolean()();
   IntColumn get sequence => integer()();
+  BoolColumn get isImportant => boolean().withDefault(const Constant(false))();
+  BoolColumn get isPinned => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column<Object>> get primaryKey => {id};
@@ -53,12 +56,16 @@ class MessageSummaries extends Table {
 class MessageDetails extends Table {
   TextColumn get id => text()();
   TextColumn get accountId => text().withDefault(const Constant('default'))();
+  TextColumn get folderId => text().withDefault(const Constant(''))();
   TextColumn get subject => text()();
   TextColumn get sender => text()();
   TextColumn get recipients => text()();
   TextColumn get bodyPlain => text()();
   TextColumn get bodyHtml => text().nullable()();
   DateTimeColumn get receivedAt => dateTime()();
+  TextColumn get messageIdHeader => text().nullable()();
+  TextColumn get inReplyToHeader => text().nullable()();
+  TextColumn get referencesHeader => text().nullable()();
 
   @override
   Set<Column<Object>> get primaryKey => {id};
@@ -100,7 +107,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -112,6 +119,34 @@ class AppDatabase extends _$AppDatabase {
         await migrator.addColumn(
           attachmentMetadata,
           attachmentMetadata.accountId,
+        );
+      }
+      if (from < 3) {
+        await migrator.addColumn(messageDetails, messageDetails.folderId);
+        await migrator.addColumn(
+          messageDetails,
+          messageDetails.messageIdHeader,
+        );
+        await migrator.addColumn(
+          messageDetails,
+          messageDetails.inReplyToHeader,
+        );
+        await migrator.addColumn(
+          messageDetails,
+          messageDetails.referencesHeader,
+        );
+      }
+      if (from < 4) {
+        await migrator.addColumn(
+          messageSummaries,
+          messageSummaries.isImportant,
+        );
+        await migrator.addColumn(messageSummaries, messageSummaries.isPinned);
+      }
+      if (from < 5) {
+        await migrator.addColumn(
+          messageSummaries,
+          messageSummaries.pendingReadState,
         );
       }
     },
