@@ -20,7 +20,10 @@ class DeviceRegistrationConfig {
 
   factory DeviceRegistrationConfig.fromEnvironment() {
     return const DeviceRegistrationConfig(
-      apiBaseUrl: String.fromEnvironment('MAIL_NOTIFY_API_BASE_URL'),
+      apiBaseUrl: String.fromEnvironment(
+        'MAIL_NOTIFY_API_BASE_URL',
+        defaultValue: 'https://mailadmin.finestar.hr',
+      ),
       registrationSecret: String.fromEnvironment('DEVICE_REGISTRATION_SECRET'),
     );
   }
