@@ -4,126 +4,73 @@
   <img src="assets/images/fs_mail_logo.png" alt="FS Mail Logo" width="300" />
 </p>
 
-FS Mail je mail aplikacija za Fine Star ekosustav. Projekt se sastoji od mobilnog klijenta i backend sloja koji preuzima autentikaciju, pristup mailboxu, dohvat poruka, slanje mailova i dodatne mailbox operacije.
+<p align="center">
+  Modern email experience for the Fine Star ecosystem.<br>
+  Built with a Flutter client, a Django backend, and a backend-first architecture.
+</p>
 
-Cilj projekta je imati moderni mail sustav u kojem klijent ne radi direktno IMAP/SMTP kao primarni runtime put, nego koristi backend API kao glavni izvor istine.
+---
 
-## Što projekt sadrži
+## Overview
 
-Projekt trenutno obuhvaća dvije glavne cjeline:
+FS Mail is a modern mail application project designed to deliver a cleaner, more maintainable email experience.
 
-- **Flutter / Android klijent** za rad s mailboxom
-- **Django backend** koji radi autentikaciju, IMAP read, SMTP send i mail API sloj
+Instead of relying on direct IMAP/SMTP access in the mobile client, FS Mail moves core mail operations into the backend. That gives the project a stronger foundation for authentication, mailbox access, message retrieval, attachments, push notifications, and future mailbox features.
 
-Uz aplikacijski repo, projekt koristi i zaseban `mailserver` repo za mail infrastrukturu, deploy i server-side operativne dijelove.
+## What FS Mail includes
 
-## Glavne mogućnosti projekta
+### Mobile app
 
-### Mobilna aplikacija
+The Flutter / Android client is focused on everyday mailbox workflows:
 
-Flutter klijent pokriva ili aktivno razvija ove funkcionalnosti:
-
-- login korisnika preko backenda
-- prikaz foldera i mailbox navigaciju
-- prikaz liste poruka
-- prikaz detalja poruke
-- compose i slanje maila preko backend API-ja
-- prikaz HTML email poruka
-- rad s attachmentima
-- FCM push notifikacije
-- multi-account smjer razvoja
-- threaded i unified conversation prikaz
-
-### Backend
-
-Django backend pokriva ili definira ove capabilityje:
-
-- auth/session endpointi
-- IMAP čitanje mailboxa
-- SMTP slanje poruka
-- API za foldere, message list i message detail
-- attachment metadata i download/send support
-- move-to-trash i restore API smjer
-- push registration i push delivery
-- OpenAPI schema i docs generiranje
-- normalizirani mail integration layer za Android klijent
-
-## Arhitektura
-
-FS Mail prati backend-first pristup.
-
-### Klijent
-
-Mobilna aplikacija je odgovorna za:
-
-- prijavu korisnika
-- prikaz mailbox UI-a
-- lokalni cache i UI state
-- navigaciju kroz foldere i poruke
-- compose ekran i korisničke akcije
-- prikaz notifikacija i account-aware ponašanje na uređaju
-
-### Backend
-
-Backend je odgovoran za:
-
-- autentikaciju i session/token model
-- komunikaciju s IMAP i SMTP serverima
-- dohvat foldera i poruka
-- parsiranje plain text i HTML mail sadržaja
-- attachment metadata i attachment operacije
-- push registraciju i dostavu push događaja
-- dokumentirani API sloj za mobilni klijent
-
-## Backend API
-
-Projekt koristi backend API kao primarni sloj za mobilnu aplikaciju.
-
-Osnovni MVP endpointi uključuju:
-
-- `POST /api/auth/login`
-- `GET /api/auth/me`
-- `GET /api/mail/folders`
-- `GET /api/mail/messages?folder=INBOX&limit=50`
-- `GET /api/mail/messages/{uid}?folder=INBOX`
-- `POST /api/mail/send`
-
-Daljnji API smjer uključuje i:
-
-- attachment metadata i attachment download
-- move-to-trash i restore akcije
-- threaded conversation API
-- unified conversations across inbox and sent
-- account summaries endpoint
-- device registration i push delivery endpoint
-- index status i periodic sync capability
-
-## Što je već pokriveno na razini projekta
-
-Na temelju strukture repoa i issue planova, FS Mail već ima jasno definirane ili implementirane cjeline za:
-
-- backend mail integration foundation
-- IMAP mailbox read service
-- SMTP send service
-- DRF mail API MVP
-- Android/backend API client migration
-- push notification arhitekturu
-- attachment support
+- login and account access
+- folder and mailbox navigation
+- message list and message detail views
+- compose and send flows
 - HTML email rendering
-- CID inline image handling
-- nested folder support
-- mailbox pagination
-- delete kao move-to-trash
-- multi-account push i summaries smjer
-- conversation/threading smjer
+- attachment handling
+- push notification support
+- conversation-oriented mail UX
 
-## Mailserver repo
+### Backend
 
-Uz ovaj repo postoji i povezani `mailserver` repo koji pokriva infrastrukturni sloj sustava, uključujući mailserver operacije i dio backend-side capabilityja vezanih uz indeksiranje, sync i operativni deploy.
+The Django backend powers the app with a dedicated mail API:
 
-Ovaj repo (`finestar-mail`) primarno opisuje aplikacijski i API sloj, dok `mailserver` pokriva mail infrastrukturu.
+- authentication and session endpoints
+- IMAP mailbox read services
+- SMTP send services
+- folder, message list, and message detail APIs
+- attachment metadata and mail operations
+- push registration and delivery support
+- documented API schema and integration layer
 
-## Razvoj i provjere
+## Architecture
+
+FS Mail follows a backend-first approach.
+
+The mobile app focuses on user experience, navigation, and local UI state.
+The backend handles mailbox communication, mail parsing, sending, and the API contract used by the client.
+
+This separation makes the project easier to extend with features such as attachments, mailbox actions, multi-account flows, threaded conversations, and operational mail services.
+
+## Project scope
+
+FS Mail is being developed around these product areas:
+
+- backend-driven mailbox access
+- mobile-first email experience
+- HTML and attachment-friendly message rendering
+- push-aware mailbox updates
+- support for richer conversation views
+- scalable foundation for multi-account workflows
+
+## Related infrastructure
+
+This repository focuses on the application and API side of FS Mail.
+
+A related `mailserver` repository covers the infrastructure layer, including mail server operations and supporting backend-side operational capabilities.
+
+## Development
 
 ### Flutter / Android
 
@@ -142,22 +89,9 @@ docker compose run --rm mailadmin python manage.py test
 docker compose run --rm mailadmin python manage.py spectacular --file /tmp/schema.yaml
 ```
 
-## Smjernice za razvoj
+## Ownership
 
-Kod promjena u projektu korisno je držati odvojene sliceove rada, npr.:
-
-- backend API promjene
-- Flutter / Android UI promjene
-- attachment i mail parsing promjene
-- push / sync promjene
-- asset-only promjene
-- issue-scoped feature rad
-
-Takav pristup olakšava review i održavanje projekta.
-
-## Vlasništvo
-
-FS Mail je projekt tvrtke **Fine Star**.
+FS Mail is a project of **Fine Star**.
 
 - Website: [www.finestar.hr](https://www.finestar.hr)
 
