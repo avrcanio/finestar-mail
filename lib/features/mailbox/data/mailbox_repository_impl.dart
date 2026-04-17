@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import '../../../data/local/app_database.dart' as db;
 import '../../../data/remote/backend_mail_api_client.dart';
 import '../../../data/secure/secure_storage_service.dart';
+import '../domain/entities/mail_conversation.dart';
 import '../domain/entities/mail_delete_result.dart';
 import '../domain/entities/mail_folder.dart' as domain;
 import '../domain/entities/mail_message_attachment.dart';
@@ -108,21 +109,25 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final response = await _backendMailApiClient!.folders(token: token);
     return response.folders
         .where((folder) => _backendFolderPath(folder).isNotEmpty)
-        .map((folder) {
-          final path = _backendFolderPath(folder);
-          return domain.MailFolder(
-            id: _folderId(accountId, path),
-            name: folder.name.trim().isEmpty ? path : folder.name,
-            path: path,
-            isInbox: _isInboxPath(path),
-            displayName: _backendFolderDisplayName(folder, path),
-            parentPath: _backendFolderParentPath(folder, path),
-            depth: _backendFolderDepth(folder, path),
-            selectable:
-                folder.selectable && !_hasFlag(folder.flags, 'Noselect'),
-          );
-        })
+        .map((folder) => _mailFolderFromBackend(accountId, folder))
         .toList();
+  }
+
+  domain.MailFolder _mailFolderFromBackend(
+    String accountId,
+    BackendFolderDto folder,
+  ) {
+    final path = _backendFolderPath(folder);
+    return domain.MailFolder(
+      id: _folderId(accountId, path),
+      name: folder.name.trim().isEmpty ? path : folder.name,
+      path: path,
+      isInbox: _isInboxPath(path),
+      displayName: _backendFolderDisplayName(folder, path),
+      parentPath: _backendFolderParentPath(folder, path),
+      depth: _backendFolderDepth(folder, path),
+      selectable: folder.selectable && !_hasFlag(folder.flags, 'Noselect'),
+    );
   }
 
   Future<void> _replaceCachedFolders(
@@ -364,6 +369,148 @@ class MailboxRepositoryImpl implements MailboxRepository {
     );
   }
 
+  @override
+  Future<List<MailConversation>> getUnifiedConversations({
+    required String accountId,
+    int limit = 50,
+    bool forceRefresh = false,
+  }) async {
+    final remoteConversations = await _fetchBackendUnifiedConversations(
+      accountId: accountId,
+      limit: limit,
+    );
+    if (remoteConversations != null) {
+      return remoteConversations;
+    }
+
+    final inbox = domain.MailFolder(
+      id: _folderId(accountId, 'INBOX'),
+      name: 'INBOX',
+      path: 'INBOX',
+      isInbox: true,
+    );
+    final page = await getMessagePage(
+      accountId: accountId,
+      folder: inbox,
+      pageSize: limit,
+      forceRefresh: forceRefresh,
+    );
+    return page.messages.map((message) {
+      return MailConversation(
+        id: message.id,
+        messageCount: 1,
+        replyCount: 0,
+        hasUnread: !message.isRead,
+        hasAttachments: message.hasAttachments,
+        hasVisibleAttachments: message.hasAttachments,
+        participants: [
+          MailConversationParticipant(name: '', email: message.sender),
+        ],
+        messages: [
+          MailConversationMessage(
+            message: message,
+            direction: MailConversationDirection.inbound,
+          ),
+        ],
+        latestDate: message.receivedAt,
+      );
+    }).toList();
+  }
+
+  Future<List<MailConversation>?> _fetchBackendUnifiedConversations({
+    required String accountId,
+    required int limit,
+  }) async {
+    final token = await _authToken(accountId);
+    if (token == null) {
+      return null;
+    }
+
+    late final BackendUnifiedConversationsResponse response;
+    try {
+      response = await _backendMailApiClient!.unifiedConversations(
+        token: token,
+        limit: limit,
+      );
+    } on BackendMailApiException catch (error) {
+      if (error.statusCode == 404) {
+        return null;
+      }
+      rethrow;
+    }
+
+    if (response.folders.isNotEmpty) {
+      final folders = response.folders
+          .where((folder) => _backendFolderPath(folder).isNotEmpty)
+          .map((folder) => _mailFolderFromBackend(accountId, folder))
+          .toList();
+      if (folders.isNotEmpty) {
+        await _replaceCachedFolders(accountId, folders);
+      }
+    }
+
+    final inbox = domain.MailFolder(
+      id: _folderId(accountId, 'INBOX'),
+      name: 'INBOX',
+      path: 'INBOX',
+      isInbox: true,
+    );
+    final allMessages = <BackendMessageSummaryDto>[
+      for (final conversation in response.conversations)
+        for (final message in conversation.messages) message.summary,
+    ];
+    final cachedSummaries = await _cacheBackendSummaries(
+      accountId,
+      inbox,
+      allMessages,
+    );
+    final summariesById = {
+      for (final summary in cachedSummaries) summary.id: summary,
+    };
+
+    return response.conversations.map((conversation) {
+      final messages = conversation.messages.map((message) {
+        final summary = message.summary;
+        final folderPath = summary.folder.isEmpty ? inbox.path : summary.folder;
+        final id = _messageId(accountId, folderPath, summary.uid);
+        return MailConversationMessage(
+          message:
+              summariesById[id] ??
+              _summaryFromBackendMessage(accountId, inbox, summary),
+          direction: _conversationDirection(message.direction),
+        );
+      }).toList();
+      final firstMessage = messages.isEmpty ? null : messages.first.message;
+      return MailConversation(
+        id: conversation.conversationId.isEmpty
+            ? firstMessage?.id ?? ''
+            : conversation.conversationId,
+        messageCount: conversation.messageCount == 0
+            ? messages.length
+            : conversation.messageCount,
+        replyCount: conversation.replyCount == 0 && messages.isNotEmpty
+            ? messages.length - 1
+            : conversation.replyCount,
+        hasUnread: conversation.hasUnread,
+        hasAttachments: conversation.hasAttachments,
+        hasVisibleAttachments: conversation.hasVisibleAttachments,
+        participants: conversation.participants
+            .map(
+              (participant) => MailConversationParticipant(
+                name: participant.name,
+                email: participant.email,
+              ),
+            )
+            .toList(),
+        messages: messages,
+        latestDate:
+            conversation.latestDate ??
+            firstMessage?.receivedAt ??
+            DateTime.now(),
+      );
+    }).toList();
+  }
+
   Future<MailMessagePage> _cachedMessagePage({
     required String accountId,
     required domain.MailFolder folder,
@@ -478,6 +625,37 @@ class MailboxRepositoryImpl implements MailboxRepository {
     });
 
     return _sortSummaries(mergedSummaries);
+  }
+
+  MailMessageSummary _summaryFromBackendMessage(
+    String accountId,
+    domain.MailFolder folder,
+    BackendMessageSummaryDto message,
+  ) {
+    final folderPath = message.folder.isEmpty ? folder.path : message.folder;
+    final folderId = _folderId(accountId, folderPath);
+    return MailMessageSummary(
+      id: _messageId(accountId, folderPath, message.uid),
+      folderId: folderId,
+      subject: _subject(message.subject),
+      sender: _sender(message.sender),
+      preview: _preview(message.subject),
+      receivedAt: message.date ?? DateTime.now(),
+      isRead: _hasFlag(message.flags, 'seen'),
+      isImportant: _hasFlag(message.flags, 'flagged'),
+      hasAttachments: message.hasVisibleAttachments ?? message.hasAttachments,
+      sequence: int.tryParse(message.uid) ?? 0,
+    );
+  }
+
+  MailConversationDirection _conversationDirection(String direction) {
+    switch (direction.trim().toLowerCase()) {
+      case 'outbound':
+        return MailConversationDirection.outbound;
+      case 'inbound':
+      default:
+        return MailConversationDirection.inbound;
+    }
   }
 
   @override

@@ -7,6 +7,7 @@ import 'package:finestar_mail/features/auth/presentation/auth_controller.dart';
 import 'package:finestar_mail/features/compose/domain/entities/reply_context.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_delete_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_conversation.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_attachment.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
@@ -768,6 +769,13 @@ class _FakeMailboxRepository implements MailboxRepository {
     required String accountId,
     int page = 0,
     int pageSize = 20,
+    bool forceRefresh = false,
+  }) async => const [];
+
+  @override
+  Future<List<MailConversation>> getUnifiedConversations({
+    required String accountId,
+    int limit = 50,
     bool forceRefresh = false,
   }) async => const [];
 

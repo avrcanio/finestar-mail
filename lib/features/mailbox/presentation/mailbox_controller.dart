@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/providers.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/entities/mail_delete_result.dart';
+import '../domain/entities/mail_conversation.dart';
 import '../domain/entities/mail_folder.dart';
 import '../domain/entities/mail_message_detail.dart';
 import '../domain/entities/mail_message_page.dart';
@@ -56,6 +57,204 @@ final folderMessagesProvider = FutureProvider.autoDispose
       );
       return page.messages;
     });
+
+final mailboxConversationsControllerProvider = AsyncNotifierProvider.autoDispose
+    .family<
+      MailboxConversationsController,
+      MailboxConversationsState,
+      MailFolder
+    >(MailboxConversationsController.new);
+
+class MailboxConversationsState {
+  const MailboxConversationsState({required this.conversations});
+
+  final List<MailConversation> conversations;
+
+  MailboxConversationsState copyWith({List<MailConversation>? conversations}) {
+    return MailboxConversationsState(
+      conversations: conversations ?? this.conversations,
+    );
+  }
+}
+
+class MailboxConversationsController
+    extends AsyncNotifier<MailboxConversationsState> {
+  MailboxConversationsController(this.folder);
+
+  static const limit = 50;
+
+  final MailFolder folder;
+
+  @override
+  Future<MailboxConversationsState> build() async {
+    return _loadConversations(forceRefresh: true);
+  }
+
+  Future<void> refresh() async {
+    state = const AsyncLoading();
+    state = await AsyncValue.guard(
+      () => _loadConversations(forceRefresh: true),
+    );
+  }
+
+  Future<MailDeleteResult> moveSelectedToTrash(List<String> messageIds) async {
+    final current = state.asData?.value;
+    if (current == null || messageIds.isEmpty) {
+      return const MailDeleteResult(movedMessageIds: [], failed: []);
+    }
+
+    final account = await ref.read(activeAccountProvider.future);
+    if (account == null) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: messageIds
+            .map(
+              (id) => MailDeleteFailure(
+                messageId: id,
+                message: 'Active account session is missing.',
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    final repository = ref.read(mailboxRepositoryProvider);
+    final results = <MailDeleteResult>[];
+    for (final messageId in messageIds) {
+      results.add(
+        await repository.moveMessageToTrash(
+          accountId: account.id,
+          messageId: messageId,
+        ),
+      );
+    }
+    final result = MailDeleteResult(
+      movedMessageIds: [
+        for (final result in results) ...result.movedMessageIds,
+      ],
+      failed: [for (final result in results) ...result.failed],
+    );
+    if (result.movedMessageIds.isNotEmpty) {
+      state = AsyncData(
+        current.copyWith(
+          conversations: _removeMessagesFromConversations(
+            current.conversations,
+            result.movedMessageIds.toSet(),
+          ),
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<MailRestoreResult> restoreSelectedToInbox(
+    List<String> messageIds,
+  ) async {
+    final current = state.asData?.value;
+    if (current == null || messageIds.isEmpty) {
+      return const MailRestoreResult(restoredMessageIds: [], failed: []);
+    }
+
+    final account = await ref.read(activeAccountProvider.future);
+    if (account == null) {
+      return MailRestoreResult(
+        restoredMessageIds: const [],
+        failed: messageIds
+            .map(
+              (id) => MailRestoreFailure(
+                messageId: id,
+                message: 'Active account session is missing.',
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    final repository = ref.read(mailboxRepositoryProvider);
+    final results = <MailRestoreResult>[];
+    for (final messageId in messageIds) {
+      results.add(
+        await repository.restoreMessageToInbox(
+          accountId: account.id,
+          messageId: messageId,
+        ),
+      );
+    }
+    final result = MailRestoreResult(
+      restoredMessageIds: [
+        for (final result in results) ...result.restoredMessageIds,
+      ],
+      failed: [for (final result in results) ...result.failed],
+    );
+    if (result.restoredMessageIds.isNotEmpty) {
+      state = AsyncData(
+        current.copyWith(
+          conversations: _removeMessagesFromConversations(
+            current.conversations,
+            result.restoredMessageIds.toSet(),
+          ),
+        ),
+      );
+    }
+    return result;
+  }
+
+  Future<MailboxConversationsState> _loadConversations({
+    required bool forceRefresh,
+  }) async {
+    final account = await ref.watch(activeAccountProvider.future);
+    if (account == null) {
+      return const MailboxConversationsState(conversations: []);
+    }
+
+    final conversations = await ref
+        .watch(mailboxRepositoryProvider)
+        .getUnifiedConversations(
+          accountId: account.id,
+          limit: limit,
+          forceRefresh: forceRefresh,
+        );
+    return MailboxConversationsState(conversations: conversations);
+  }
+
+  List<MailConversation> _removeMessagesFromConversations(
+    List<MailConversation> conversations,
+    Set<String> messageIds,
+  ) {
+    return conversations
+        .map((conversation) {
+          final remaining = conversation.messages
+              .where((message) => !messageIds.contains(message.message.id))
+              .toList();
+          if (remaining.isEmpty) {
+            return null;
+          }
+          return MailConversation(
+            id: conversation.id,
+            messageCount: remaining.length,
+            replyCount: remaining.length - 1,
+            hasUnread: remaining.any((message) => !message.message.isRead),
+            hasAttachments: remaining.any(
+              (message) => message.message.hasAttachments,
+            ),
+            hasVisibleAttachments: remaining.any(
+              (message) => message.message.hasAttachments,
+            ),
+            participants: conversation.participants,
+            messages: remaining,
+            latestDate: remaining
+                .map((message) => message.message.receivedAt)
+                .reduce(_latestDate),
+          );
+        })
+        .whereType<MailConversation>()
+        .toList();
+  }
+
+  DateTime _latestDate(DateTime left, DateTime right) {
+    return right.isAfter(left) ? right : left;
+  }
+}
 
 class MailboxMessagesState {
   const MailboxMessagesState({

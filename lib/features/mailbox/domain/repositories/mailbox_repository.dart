@@ -1,4 +1,5 @@
 import '../entities/mail_folder.dart';
+import '../entities/mail_conversation.dart';
 import '../entities/mail_delete_result.dart';
 import '../entities/mail_message_detail.dart';
 import '../entities/mail_message_attachment.dart';
@@ -23,6 +24,12 @@ abstract class MailboxRepository {
     required MailFolder folder,
     int pageSize = 50,
     String? beforeUid,
+    bool forceRefresh = false,
+  });
+
+  Future<List<MailConversation>> getUnifiedConversations({
+    required String accountId,
+    int limit = 50,
     bool forceRefresh = false,
   });
 
