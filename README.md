@@ -4,58 +4,82 @@
   <img src="assets/images/fs_mail_logo.png" alt="FS Mail Logo" width="300" />
 </p>
 
-FS Mail is an email application project owned by [Fine Star](https://www.finestar.hr).
+FS Mail je mail aplikacija za Fine Star ekosustav. Projekt se sastoji od mobilnog klijenta i backend sloja koji preuzima autentikaciju, pristup mailboxu, dohvat poruka, slanje mailova i dodatne mailbox operacije.
 
-The project is being developed as a modern mail solution with an Android client and a backend service. It is evolving from direct protocol-based access toward a backend-first architecture, where the client communicates with a dedicated API for authentication, mailbox access, message retrieval, and sending mail.
+Cilj projekta je imati moderni mail sustav u kojem klijent ne radi direktno IMAP/SMTP kao primarni runtime put, nego koristi backend API kao glavni izvor istine.
 
-## Project Overview
+## Što projekt sadrži
 
-FS Mail is designed to provide a cleaner and more maintainable email experience by separating the user-facing mobile app from the lower-level mail integration logic.
+Projekt trenutno obuhvaća dvije glavne cjeline:
 
-The project currently focuses on:
+- **Flutter / Android klijent** za rad s mailboxom
+- **Django backend** koji radi autentikaciju, IMAP read, SMTP send i mail API sloj
 
-- Android mail experience
-- backend API for authentication and mail operations
-- mailbox folder listing and navigation
-- message list and message detail flows
-- sending email through backend services
-- future-ready architecture for sync and message actions
+Uz aplikacijski repo, projekt koristi i zaseban `mailserver` repo za mail infrastrukturu, deploy i server-side operativne dijelove.
 
-## Project Ownership
+## Glavne mogućnosti projekta
 
-FS Mail is a project of **Fine Star**.
+### Mobilna aplikacija
 
-- Website: [www.finestar.hr](https://www.finestar.hr)
+Flutter klijent pokriva ili aktivno razvija ove funkcionalnosti:
 
-## Architecture
+- login korisnika preko backenda
+- prikaz foldera i mailbox navigaciju
+- prikaz liste poruka
+- prikaz detalja poruke
+- compose i slanje maila preko backend API-ja
+- prikaz HTML email poruka
+- rad s attachmentima
+- FCM push notifikacije
+- multi-account smjer razvoja
+- threaded i unified conversation prikaz
 
-The repository is moving toward a two-part architecture:
+### Backend
 
-### Android App
+Django backend pokriva ili definira ove capabilityje:
 
-The Android client is responsible for:
+- auth/session endpointi
+- IMAP čitanje mailboxa
+- SMTP slanje poruka
+- API za foldere, message list i message detail
+- attachment metadata i download/send support
+- move-to-trash i restore API smjer
+- push registration i push delivery
+- OpenAPI schema i docs generiranje
+- normalizirani mail integration layer za Android klijent
 
-- login flow
-- mailbox and folder navigation
-- message list rendering
-- message detail display
-- compose and send flow
-- local cache and UI support logic
+## Arhitektura
 
-### Backend Service
+FS Mail prati backend-first pristup.
 
-The backend is responsible for:
+### Klijent
 
-- authentication/session endpoints
-- mail API endpoints
-- IMAP mailbox access
-- SMTP send integration
-- normalized folder and message data for the client
-- API documentation generation
+Mobilna aplikacija je odgovorna za:
 
-## Backend API Direction
+- prijavu korisnika
+- prikaz mailbox UI-a
+- lokalni cache i UI state
+- navigaciju kroz foldere i poruke
+- compose ekran i korisničke akcije
+- prikaz notifikacija i account-aware ponašanje na uređaju
 
-The current MVP backend direction includes the following endpoints:
+### Backend
+
+Backend je odgovoran za:
+
+- autentikaciju i session/token model
+- komunikaciju s IMAP i SMTP serverima
+- dohvat foldera i poruka
+- parsiranje plain text i HTML mail sadržaja
+- attachment metadata i attachment operacije
+- push registraciju i dostavu push događaja
+- dokumentirani API sloj za mobilni klijent
+
+## Backend API
+
+Projekt koristi backend API kao primarni sloj za mobilnu aplikaciju.
+
+Osnovni MVP endpointi uključuju:
 
 - `POST /api/auth/login`
 - `GET /api/auth/me`
@@ -64,31 +88,44 @@ The current MVP backend direction includes the following endpoints:
 - `GET /api/mail/messages/{uid}?folder=INBOX`
 - `POST /api/mail/send`
 
-These endpoints are intended to become the primary interface used by the Android app.
+Daljnji API smjer uključuje i:
 
-## Development Roadmap
+- attachment metadata i attachment download
+- move-to-trash i restore akcije
+- threaded conversation API
+- unified conversations across inbox and sent
+- account summaries endpoint
+- device registration i push delivery endpoint
+- index status i periodic sync capability
 
-Based on the current project direction, the main areas of work include:
+## Što je već pokriveno na razini projekta
 
-- backend mail API MVP
-- Android migration to backend-driven mail access
-- support for nested IMAP folders under `INBOX`
-- Android rendering of nested folders as a collapsible tree
-- lazy-loaded infinite scrolling for mailbox messages
-- server-wide read/unread synchronization
-- future support for additional mail actions such as restore, attachment handling, and message state APIs
+Na temelju strukture repoa i issue planova, FS Mail već ima jasno definirane ili implementirane cjeline za:
 
-## Development Status
+- backend mail integration foundation
+- IMAP mailbox read service
+- SMTP send service
+- DRF mail API MVP
+- Android/backend API client migration
+- push notification arhitekturu
+- attachment support
+- HTML email rendering
+- CID inline image handling
+- nested folder support
+- mailbox pagination
+- delete kao move-to-trash
+- multi-account push i summaries smjer
+- conversation/threading smjer
 
-The project is under active development.
+## Mailserver repo
 
-Recent and ongoing work suggests a transition from direct IMAP/SMTP handling inside the mobile client toward a backend-first architecture that keeps protocol-specific behavior in the backend and exposes a more stable API contract to the app.
+Uz ovaj repo postoji i povezani `mailserver` repo koji pokriva infrastrukturni sloj sustava, uključujući mailserver operacije i dio backend-side capabilityja vezanih uz indeksiranje, sync i operativni deploy.
 
-## Getting Started
+Ovaj repo (`finestar-mail`) primarno opisuje aplikacijski i API sloj, dok `mailserver` pokriva mail infrastrukturu.
 
-### Android / Flutter
+## Razvoj i provjere
 
-Common checks for the Android app:
+### Flutter / Android
 
 ```bash
 flutter pub get
@@ -99,53 +136,30 @@ flutter build apk --debug
 
 ### Backend
 
-Common backend validation flow:
-
 ```bash
 docker compose build mailadmin
 docker compose run --rm mailadmin python manage.py test
 docker compose run --rm mailadmin python manage.py spectacular --file /tmp/schema.yaml
 ```
 
-Make sure local environment variables and mail server settings are configured correctly before running backend services.
+## Smjernice za razvoj
 
-## Testing
+Kod promjena u projektu korisno je držati odvojene sliceove rada, npr.:
 
-Recommended checks:
+- backend API promjene
+- Flutter / Android UI promjene
+- attachment i mail parsing promjene
+- push / sync promjene
+- asset-only promjene
+- issue-scoped feature rad
 
-### Android
+Takav pristup olakšava review i održavanje projekta.
 
-```bash
-dart analyze
-flutter test
-flutter build apk --debug
-```
+## Vlasništvo
 
-### Backend
+FS Mail je projekt tvrtke **Fine Star**.
 
-```bash
-docker compose run --rm mailadmin python manage.py test
-docker compose run --rm mailadmin python manage.py spectacular --file /tmp/schema.yaml
-```
-
-## Notes
-
-- Backend folder paths should remain canonical identifiers for mailbox operations.
-- UI labels may be normalized for better readability without changing backend identifiers.
-- New features should ideally be developed in small, clearly separated slices.
-- Backend and Android follow-up work should remain scoped and explicit where practical.
-
-## Contributing
-
-When contributing, prefer focused changesets such as:
-
-- backend API changes
-- Android UI/client changes
-- mailbox behavior improvements
-- asset-only updates
-- issue-scoped feature slices
-
-Keeping work separated into small, reviewable slices will make the project easier to maintain.
+- Website: [www.finestar.hr](https://www.finestar.hr)
 
 ## License
 
