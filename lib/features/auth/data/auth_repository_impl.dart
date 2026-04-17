@@ -6,6 +6,15 @@ import '../domain/entities/connection_settings.dart';
 import '../domain/entities/mail_account.dart';
 import '../domain/repositories/auth_repository.dart';
 
+const _legacyConnectionSettings = ConnectionSettings(
+  imapHost: '',
+  imapPort: 0,
+  imapSecurity: MailSecurity.none,
+  smtpHost: '',
+  smtpPort: 0,
+  smtpSecurity: MailSecurity.none,
+);
+
 class AuthRepositoryImpl implements AuthRepository {
   AuthRepositoryImpl({
     required SecureStorageService secureStorageService,
@@ -73,7 +82,6 @@ class AuthRepositoryImpl implements AuthRepository {
     required String email,
     required String displayName,
     required String password,
-    required ConnectionSettings settings,
   }) async {
     final normalizedEmail = email.trim().toLowerCase();
     BackendLoginResponse loginResponse;
@@ -100,7 +108,7 @@ class AuthRepositoryImpl implements AuthRepository {
           ? normalizedEmail
           : loginResponse.accountEmail,
       displayName: displayName.isEmpty ? email : displayName,
-      connectionSettings: settings,
+      connectionSettings: _legacyConnectionSettings,
       createdAt: DateTime.now(),
     );
 
@@ -111,12 +119,12 @@ class AuthRepositoryImpl implements AuthRepository {
             id: account.id,
             email: account.email,
             displayName: account.displayName,
-            imapHost: settings.imapHost,
-            imapPort: settings.imapPort,
-            imapSecurity: settings.imapSecurity.name,
-            smtpHost: settings.smtpHost,
-            smtpPort: settings.smtpPort,
-            smtpSecurity: settings.smtpSecurity.name,
+            imapHost: _legacyConnectionSettings.imapHost,
+            imapPort: _legacyConnectionSettings.imapPort,
+            imapSecurity: _legacyConnectionSettings.imapSecurity.name,
+            smtpHost: _legacyConnectionSettings.smtpHost,
+            smtpPort: _legacyConnectionSettings.smtpPort,
+            smtpSecurity: _legacyConnectionSettings.smtpSecurity.name,
             createdAt: account.createdAt,
           ),
         );
@@ -164,29 +172,6 @@ class AuthRepositoryImpl implements AuthRepository {
       } else {
         await setActiveAccount(remaining.first.id);
       }
-    }
-  }
-
-  @override
-  Future<Result<void>> testConnection({
-    required String email,
-    required String password,
-    required ConnectionSettings settings,
-  }) async {
-    try {
-      final loginResponse = await _backendMailApiClient.login(
-        email: email.trim().toLowerCase(),
-        password: password,
-      );
-      if (loginResponse.authenticated &&
-          loginResponse.token.trim().isNotEmpty) {
-        return const Success(null);
-      }
-      return const Failure('Backend did not return a valid session token.');
-    } on BackendMailApiException catch (error) {
-      return Failure(error.userMessage);
-    } catch (error) {
-      return Failure('Unable to test backend connection: $error');
     }
   }
 

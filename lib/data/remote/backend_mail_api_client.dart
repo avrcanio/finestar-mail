@@ -40,6 +40,19 @@ class BackendMailApiClient {
     return BackendIdentityResponse.fromJson(json);
   }
 
+  Future<BackendAccountSummariesResponse> accountSummaries({
+    required String token,
+    required String fcmToken,
+  }) async {
+    final json = await _requestJson(
+      method: 'GET',
+      path: '/api/accounts/summaries',
+      queryParameters: {'fcm_token': fcmToken.trim()},
+      token: token,
+    );
+    return BackendAccountSummariesResponse.fromJson(json);
+  }
+
   Future<BackendFoldersResponse> folders({required String token}) async {
     final json = await _requestJson(
       method: 'GET',
@@ -68,6 +81,20 @@ class BackendMailApiClient {
       token: token,
     );
     return BackendMessagesResponse.fromJson(json);
+  }
+
+  Future<BackendConversationsResponse> conversations({
+    required String token,
+    required String folder,
+    required int limit,
+  }) async {
+    final json = await _requestJson(
+      method: 'GET',
+      path: '/api/mail/conversations',
+      queryParameters: {'folder': folder, 'limit': '$limit'},
+      token: token,
+    );
+    return BackendConversationsResponse.fromJson(json);
   }
 
   Future<BackendUnifiedConversationsResponse> unifiedConversations({
@@ -485,6 +512,47 @@ class BackendIdentityResponse {
   }
 }
 
+class BackendAccountSummariesResponse {
+  const BackendAccountSummariesResponse({required this.accounts});
+
+  final List<BackendAccountSummaryDto> accounts;
+
+  factory BackendAccountSummariesResponse.fromJson(Map<String, dynamic> json) {
+    return BackendAccountSummariesResponse(
+      accounts: _listOfObjects(
+        json['accounts'],
+      ).map(BackendAccountSummaryDto.fromJson).toList(),
+    );
+  }
+}
+
+class BackendAccountSummaryDto {
+  const BackendAccountSummaryDto({
+    required this.accountEmail,
+    required this.displayName,
+    required this.unreadCount,
+    required this.importantCount,
+  });
+
+  final String accountEmail;
+  final String displayName;
+  final int unreadCount;
+  final int importantCount;
+
+  factory BackendAccountSummaryDto.fromJson(Map<String, dynamic> json) {
+    return BackendAccountSummaryDto(
+      accountEmail: json['account_email'] as String? ?? '',
+      displayName: json['display_name'] as String? ?? '',
+      unreadCount: json['unread_count'] is num
+          ? (json['unread_count'] as num).toInt()
+          : 0,
+      importantCount: json['important_count'] is num
+          ? (json['important_count'] as num).toInt()
+          : 0,
+    );
+  }
+}
+
 class BackendFoldersResponse {
   const BackendFoldersResponse({
     required this.accountEmail,
@@ -570,6 +638,87 @@ class BackendMessagesResponse {
   }
 }
 
+class BackendConversationsResponse {
+  const BackendConversationsResponse({
+    required this.accountEmail,
+    required this.folder,
+    required this.conversations,
+  });
+
+  final String accountEmail;
+  final String folder;
+  final List<BackendConversationDto> conversations;
+
+  factory BackendConversationsResponse.fromJson(Map<String, dynamic> json) {
+    return BackendConversationsResponse(
+      accountEmail: json['account_email'] as String? ?? '',
+      folder: json['folder'] as String? ?? 'INBOX',
+      conversations: _listOfObjects(
+        json['conversations'],
+      ).map(BackendConversationDto.fromJson).toList(),
+    );
+  }
+}
+
+class BackendConversationDto {
+  const BackendConversationDto({
+    required this.conversationId,
+    required this.messageCount,
+    required this.replyCount,
+    required this.hasUnread,
+    required this.hasAttachments,
+    required this.hasVisibleAttachments,
+    required this.participants,
+    required this.rootMessage,
+    required this.replies,
+    required this.latestDate,
+  });
+
+  final String conversationId;
+  final int messageCount;
+  final int replyCount;
+  final bool hasUnread;
+  final bool hasAttachments;
+  final bool hasVisibleAttachments;
+  final List<BackendConversationParticipantDto> participants;
+  final BackendMessageSummaryDto rootMessage;
+  final List<BackendMessageSummaryDto> replies;
+  final DateTime? latestDate;
+
+  factory BackendConversationDto.fromJson(Map<String, dynamic> json) {
+    return BackendConversationDto(
+      conversationId: json['conversation_id'] as String? ?? '',
+      messageCount: json['message_count'] is num
+          ? (json['message_count'] as num).toInt()
+          : 0,
+      replyCount: json['reply_count'] is num
+          ? (json['reply_count'] as num).toInt()
+          : 0,
+      hasUnread: json['has_unread'] as bool? ?? false,
+      hasAttachments: json['has_attachments'] as bool? ?? false,
+      hasVisibleAttachments: json['has_visible_attachments'] as bool? ?? false,
+      participants: _conversationParticipants(json['participants']),
+      rootMessage: BackendMessageSummaryDto.fromJson(
+        json['root_message'] as Map<String, dynamic>? ?? const {},
+      ),
+      replies: _listOfObjects(
+        json['replies'],
+      ).map(BackendMessageSummaryDto.fromJson).toList(),
+      latestDate: _dateTime(json['latest_date']),
+    );
+  }
+}
+
+class BackendConversationParticipantDto {
+  const BackendConversationParticipantDto({
+    required this.name,
+    required this.email,
+  });
+
+  final String name;
+  final String email;
+}
+
 class BackendUnifiedConversationsResponse {
   const BackendUnifiedConversationsResponse({
     required this.accountEmail,
@@ -586,9 +735,9 @@ class BackendUnifiedConversationsResponse {
   ) {
     return BackendUnifiedConversationsResponse(
       accountEmail: json['account_email'] as String? ?? '',
-      folders: _listOfObjects(
-        json['folders'],
-      ).map(BackendFolderDto.fromJson).toList(),
+      folders: _listOfObjects(json['folders'])
+          .map(BackendFolderDto.fromJson)
+          .toList(),
       conversations: _listOfObjects(
         json['conversations'],
       ).map(BackendUnifiedConversationDto.fromJson).toList(),
@@ -657,16 +806,6 @@ class BackendUnifiedConversationMessageDto {
       direction: json['direction'] as String? ?? 'inbound',
     );
   }
-}
-
-class BackendConversationParticipantDto {
-  const BackendConversationParticipantDto({
-    required this.name,
-    required this.email,
-  });
-
-  final String name;
-  final String email;
 }
 
 class BackendMessageDetailResponse {

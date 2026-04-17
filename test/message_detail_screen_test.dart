@@ -814,6 +814,14 @@ class _FakeMailboxRepository implements MailboxRepository {
   }) async => const [];
 
   @override
+  Future<List<MailConversation>> getConversations({
+    required String accountId,
+    required MailFolder folder,
+    int limit = 50,
+    bool forceRefresh = false,
+  }) async => const [];
+
+  @override
   Future<MailDeleteResult> moveMessagesToTrash({
     required String accountId,
     required MailFolder folder,

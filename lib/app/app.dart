@@ -3,10 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/theme/app_theme.dart';
-import '../features/auth/domain/entities/mail_account.dart';
 import '../features/auth/presentation/auth_controller.dart';
 import '../features/mailbox/presentation/mailbox_controller.dart';
 import '../features/notifications/data/mail_notification_payload.dart';
+import '../features/notifications/presentation/in_app_mail_notification_controller.dart';
+import '../features/notifications/presentation/in_app_mail_notification_host.dart';
 import 'providers.dart';
 import 'router/app_route.dart';
 import 'router/app_router.dart';
@@ -21,7 +22,7 @@ class FinestarMailApp extends ConsumerStatefulWidget {
 class _FinestarMailAppState extends ConsumerState<FinestarMailApp>
     with WidgetsBindingObserver {
   bool _notificationListenersStarted = false;
-  Future<bool>? _foregroundInboxSync;
+  Future<void>? _deviceRegistration;
 
   @override
   void initState() {
@@ -33,15 +34,11 @@ class _FinestarMailAppState extends ConsumerState<FinestarMailApp>
         return;
       }
       _startNotificationListeners();
-      final account = ref.read(activeAccountProvider).asData?.value;
-      if (account != null) {
-        _registerDevice(account);
-      }
+      _registerAllDevices();
     }, fireImmediately: true);
-    ref.listenManual(activeAccountProvider, (_, next) {
-      final account = next.asData?.value;
-      if (account != null) {
-        _registerDevice(account);
+    ref.listenManual(accountsProvider, (_, next) {
+      if (next.hasValue) {
+        _registerAllDevices();
       }
     }, fireImmediately: true);
   }
@@ -56,6 +53,7 @@ class _FinestarMailAppState extends ConsumerState<FinestarMailApp>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _syncInboxForPayload(const MailNotificationPayload());
+      ref.invalidate(accountSummariesProvider);
     }
   }
 
@@ -68,10 +66,7 @@ class _FinestarMailAppState extends ConsumerState<FinestarMailApp>
       if (!next.hasValue) {
         return;
       }
-      final account = ref.read(activeAccountProvider).asData?.value;
-      if (account != null) {
-        _registerDevice(account);
-      }
+      _registerAllDevices();
     });
     ref.listenManual(fcmMessageOpenedProvider, (_, next) {
       final message = next.asData?.value;
@@ -91,12 +86,32 @@ class _FinestarMailAppState extends ConsumerState<FinestarMailApp>
     Future.microtask(_openInitialNotification);
   }
 
-  Future<void> _registerDevice(MailAccount account) async {
+  Future<void> _registerAllDevices() {
+    final existing = _deviceRegistration;
+    if (existing != null) {
+      return existing;
+    }
+
     final config = ref.read(deviceRegistrationConfigProvider).asData?.value;
     if (config == null || !config.isConfigured) {
-      return;
+      return Future.value();
     }
-    await ref.read(deviceRegistrationServiceProvider).registerAccount(account);
+
+    final registration = ref
+        .read(accountsProvider.future)
+        .then<void>((accounts) async {
+          if (accounts.isEmpty) {
+            return;
+          }
+          await ref
+              .read(deviceRegistrationServiceProvider)
+              .registerAccounts(accounts);
+        })
+        .whenComplete(() {
+          _deviceRegistration = null;
+        });
+    _deviceRegistration = registration;
+    return registration;
   }
 
   Future<void> _openInitialNotification() async {
@@ -129,70 +144,52 @@ class _FinestarMailAppState extends ConsumerState<FinestarMailApp>
     MailNotificationPayload payload, {
     required bool openMessage,
   }) async {
+    final targetAccount = await ref
+        .read(notificationMailSyncServiceProvider)
+        .accountForPayload(payload);
     await _syncInboxForPayload(payload);
-    final account = await ref.read(activeAccountProvider.future);
-    if (account == null) {
+    ref.invalidate(accountSummariesProvider);
+
+    if (!openMessage) {
+      ref
+          .read(inAppMailNotificationControllerProvider.notifier)
+          .showMailBanner(payload, account: targetAccount);
+      return;
+    }
+
+    if (targetAccount == null) {
       if (openMessage) {
         ref.read(appRouterProvider).go(AppRoute.inbox.path);
       }
       return;
     }
 
-    if (payload.accountEmail != null &&
-        payload.accountEmail!.toLowerCase() != account.email.toLowerCase()) {
-      return;
-    }
-
-    if (!openMessage) {
-      return;
-    }
-
-    final messageId = await ref
-        .read(mailboxRepositoryProvider)
-        .findCachedMessageId(
-          accountId: account.id,
-          localMessageId: payload.localMessageId,
-          folder: payload.folder,
-          uid: payload.uid,
-          rfcMessageId: payload.messageId,
-          subject: payload.subject,
-          sender: payload.sender,
-        );
+    await ref
+        .read(authControllerProvider.notifier)
+        .setActiveAccount(targetAccount.id);
 
     if (!mounted) {
       return;
     }
 
-    if (messageId == null) {
-      ref.read(appRouterProvider).go(AppRoute.inbox.path);
-      return;
-    }
-
-    ref
-        .read(appRouterProvider)
-        .go(AppRoute.messageDetail.path.replaceFirst(':id', messageId));
+    ref.invalidate(activeAccountProvider);
+    ref.invalidate(foldersProvider);
+    ref.invalidate(mailboxConversationsControllerProvider);
+    ref.invalidate(mailboxMessagesControllerProvider);
+    ref.read(appRouterProvider).go(AppRoute.inbox.path);
   }
 
   Future<bool> _syncInboxForPayload(MailNotificationPayload payload) {
-    final existingSync = _foregroundInboxSync;
-    if (existingSync != null) {
-      return existingSync;
-    }
-
-    final sync = ref
+    return ref
         .read(notificationMailSyncServiceProvider)
         .syncInboxForPayload(payload)
         .then((synced) {
           if (synced && mounted) {
+            ref.invalidate(mailboxConversationsControllerProvider);
             ref.invalidate(mailboxMessagesControllerProvider);
           }
           return synced;
-        })
-        .whenComplete(() {
-          _foregroundInboxSync = null;
         });
-    _foregroundInboxSync = sync;
-    return sync;
   }
 
   @override
@@ -204,6 +201,8 @@ class _FinestarMailAppState extends ConsumerState<FinestarMailApp>
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(),
       routerConfig: router,
+      builder: (context, child) =>
+          InAppMailNotificationHost(child: child ?? const SizedBox.shrink()),
     );
   }
 }

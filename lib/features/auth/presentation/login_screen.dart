@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/router/app_route.dart';
-import '../domain/finestar_mailer_preset.dart';
 import 'auth_controller.dart';
 
 const _screenBackground = Color(0xFFF7F8FC);
@@ -43,7 +42,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           email: _emailController.text.trim(),
           displayName: _displayNameController.text.trim(),
           password: _passwordController.text,
-          settings: FinestarMailerPreset.settings,
         );
 
     if (!mounted) {
@@ -52,29 +50,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
     result.when(
       success: (_) => context.go(AppRoute.inbox.path),
-      failure: _showSnackBar,
-    );
-  }
-
-  Future<void> _testConnection() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
-
-    final result = await ref
-        .read(authControllerProvider.notifier)
-        .testConnection(
-          email: _emailController.text.trim(),
-          password: _passwordController.text,
-          settings: FinestarMailerPreset.settings,
-        );
-
-    if (!mounted) {
-      return;
-    }
-
-    result.when(
-      success: (_) => _showSnackBar('Connection settings look valid.'),
       failure: _showSnackBar,
     );
   }
@@ -118,8 +93,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      'Use your full email address and mailbox password. '
-                      'Server settings are preconfigured.',
+                      'Use your full email address and mailbox password.',
                       style: theme.textTheme.bodyLarge?.copyWith(
                         color: _mutedText,
                         fontSize: 17,
@@ -132,8 +106,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _PresetInfo(primaryColor: colorScheme.primary),
-                          const SizedBox(height: 20),
                           _LoginTextField(
                             controller: _displayNameController,
                             labelText: 'Display name',
@@ -166,50 +138,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       ),
                     ),
                     const SizedBox(height: 22),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: isBusy ? null : _testConnection,
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: colorScheme.primary,
-                              minimumSize: const Size.fromHeight(54),
-                              side: BorderSide(
-                                color: colorScheme.primary.withValues(
-                                  alpha: .55,
-                                ),
-                              ),
-                              shape: const StadiumBorder(),
-                              textStyle: theme.textTheme.labelLarge?.copyWith(
-                                fontSize: 15,
-                                letterSpacing: .35,
-                              ),
-                            ),
-                            child: const Text('Test connection'),
-                          ),
+                    ElevatedButton(
+                      onPressed: isBusy ? null : _submit,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _softBlue,
+                        foregroundColor: colorScheme.primary,
+                        elevation: 3,
+                        shadowColor: Colors.black.withValues(alpha: .12),
+                        minimumSize: const Size.fromHeight(56),
+                        shape: const StadiumBorder(),
+                        textStyle: theme.textTheme.labelLarge?.copyWith(
+                          fontSize: 15,
+                          letterSpacing: .35,
                         ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: isBusy ? null : _submit,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _softBlue,
-                              foregroundColor: colorScheme.primary,
-                              elevation: 3,
-                              shadowColor: Colors.black.withValues(alpha: .12),
-                              minimumSize: const Size.fromHeight(56),
-                              shape: const StadiumBorder(),
-                              textStyle: theme.textTheme.labelLarge?.copyWith(
-                                fontSize: 15,
-                                letterSpacing: .35,
-                              ),
-                            ),
-                            child: Text(
-                              isBusy ? 'Connecting...' : 'Add account',
-                            ),
-                          ),
-                        ),
-                      ],
+                      ),
+                      child: Text(isBusy ? 'Connecting...' : 'Add account'),
                     ),
                   ],
                 ),
@@ -244,78 +187,6 @@ class _LoginCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(22, 20, 22, 10),
         child: child,
-      ),
-    );
-  }
-}
-
-class _PresetInfo extends StatelessWidget {
-  const _PresetInfo({required this.primaryColor});
-
-  final Color primaryColor;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(Icons.mark_email_read_outlined, color: primaryColor, size: 20),
-            const SizedBox(width: 8),
-            Text(
-              'Finestar mail preset',
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: primaryColor,
-                fontSize: 16,
-                letterSpacing: .25,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: const [
-            _PresetChip(label: 'mail.finestar.hr'),
-            _PresetChip(label: 'IMAP 993 SSL/TLS'),
-            _PresetChip(label: 'SMTP 465 SSL/TLS'),
-            _PresetChip(label: 'Full email username'),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class _PresetChip extends StatelessWidget {
-  const _PresetChip({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final primaryColor = Theme.of(context).colorScheme.primary;
-
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: _screenBackground,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: _fieldStroke),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        child: Text(
-          label,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: primaryColor,
-            fontSize: 12,
-            letterSpacing: .25,
-          ),
-        ),
       ),
     );
   }

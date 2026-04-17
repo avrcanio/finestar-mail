@@ -2,7 +2,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
 import '../../../core/result/result.dart';
-import '../domain/entities/connection_settings.dart';
 import '../domain/entities/mail_account.dart';
 
 final accountsProvider = FutureProvider<List<MailAccount>>((ref) {
@@ -24,37 +23,15 @@ class AuthController extends AsyncNotifier<MailAccount?> {
     return ref.read(authRepositoryProvider).getActiveAccount();
   }
 
-  Future<Result<void>> testConnection({
-    required String email,
-    required String password,
-    required ConnectionSettings settings,
-  }) async {
-    state = const AsyncLoading();
-    final result = await ref
-        .read(authRepositoryProvider)
-        .testConnection(email: email, password: password, settings: settings);
-    if (!ref.mounted) {
-      return result;
-    }
-    state = AsyncData(state.asData?.value);
-    return result;
-  }
-
   Future<Result<MailAccount>> addAccount({
     required String email,
     required String displayName,
     required String password,
-    required ConnectionSettings settings,
   }) async {
     state = const AsyncLoading();
     final result = await ref
         .read(authRepositoryProvider)
-        .addAccount(
-          email: email,
-          displayName: displayName,
-          password: password,
-          settings: settings,
-        );
+        .addAccount(email: email, displayName: displayName, password: password);
 
     if (!ref.mounted) {
       return result;

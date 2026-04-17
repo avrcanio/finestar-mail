@@ -10,29 +10,43 @@ import 'mail_notification_payload.dart';
 class NotificationMailSyncService {
   NotificationMailSyncService({
     required Future<MailAccount?> Function() activeAccountLoader,
+    required Future<List<MailAccount>> Function() accountsLoader,
     required MailboxRepository mailboxRepository,
     Logger? logger,
   }) : _activeAccountLoader = activeAccountLoader,
+       _accountsLoader = accountsLoader,
        _mailboxRepository = mailboxRepository,
        _logger = logger;
 
   final Future<MailAccount?> Function() _activeAccountLoader;
+  final Future<List<MailAccount>> Function() _accountsLoader;
   final MailboxRepository _mailboxRepository;
   final Logger? _logger;
 
   Future<MailAccount?> activeAccount() => _activeAccountLoader();
 
-  Future<bool> syncInboxForPayload(MailNotificationPayload payload) async {
-    final account = await _activeAccountLoader();
-    if (account == null) {
-      _logger?.i('Skipping notification inbox sync because no account exists.');
-      return false;
+  Future<MailAccount?> accountForPayload(
+    MailNotificationPayload payload,
+  ) async {
+    final payloadAccount = payload.accountEmail?.trim().toLowerCase();
+    if (payloadAccount == null || payloadAccount.isEmpty) {
+      return _activeAccountLoader();
     }
 
-    if (!_payloadMatchesAccount(payload, account)) {
+    final accounts = await _accountsLoader();
+    for (final account in accounts) {
+      if (_payloadMatchesAccount(payloadAccount, account)) {
+        return account;
+      }
+    }
+    return null;
+  }
+
+  Future<bool> syncInboxForPayload(MailNotificationPayload payload) async {
+    final account = await accountForPayload(payload);
+    if (account == null) {
       _logger?.i(
-        'Skipping notification inbox sync for ${payload.accountEmail}; '
-        'active account is ${account.email}.',
+        'Skipping notification inbox sync because no matching account exists.',
       );
       return false;
     }
@@ -54,17 +68,17 @@ class NotificationMailSyncService {
     }
   }
 
-  bool _payloadMatchesAccount(
-    MailNotificationPayload payload,
-    MailAccount account,
-  ) {
-    final payloadAccount = payload.accountEmail?.trim().toLowerCase();
-    if (payloadAccount == null || payloadAccount.isEmpty) {
-      return true;
-    }
+  bool _payloadMatchesAccount(String payloadAccount, MailAccount account) {
     return payloadAccount == account.email.toLowerCase() ||
         payloadAccount == account.id.toLowerCase();
   }
+}
+
+Future<List<MailAccount>> loadMailAccounts({
+  required AppDatabase database,
+}) async {
+  final rows = await database.select(database.accounts).get();
+  return rows.map(_accountFromRow).toList();
 }
 
 Future<MailAccount?> loadActiveMailAccount({

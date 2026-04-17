@@ -5,9 +5,9 @@ import 'package:drift/drift.dart';
 import '../../../data/local/app_database.dart' as db;
 import '../../../data/remote/backend_mail_api_client.dart';
 import '../../../data/secure/secure_storage_service.dart';
-import '../domain/entities/mail_conversation.dart';
 import '../domain/entities/mail_delete_result.dart';
 import '../domain/entities/mail_folder.dart' as domain;
+import '../domain/entities/mail_conversation.dart';
 import '../domain/entities/mail_message_attachment.dart';
 import '../domain/entities/mail_message_detail.dart';
 import '../domain/entities/mail_message_page.dart';
@@ -303,6 +303,85 @@ class MailboxRepositoryImpl implements MailboxRepository {
   }
 
   @override
+  Future<List<MailConversation>> getConversations({
+    required String accountId,
+    required domain.MailFolder folder,
+    int limit = 50,
+    bool forceRefresh = false,
+  }) async {
+    if (folder.isInbox) {
+      final unifiedConversations = await _fetchBackendUnifiedConversations(
+        accountId: accountId,
+        fallbackFolder: folder,
+        limit: limit,
+      );
+      if (unifiedConversations != null) {
+        return unifiedConversations;
+      }
+    }
+
+    final remoteConversations = await _fetchBackendConversations(
+      accountId: accountId,
+      folder: folder,
+      limit: limit,
+    );
+    if (remoteConversations != null) {
+      return remoteConversations;
+    }
+
+    final page = await getMessagePage(
+      accountId: accountId,
+      folder: folder,
+      pageSize: limit,
+      forceRefresh: forceRefresh,
+    );
+    return page.messages
+        .map(
+          (message) => MailConversation(
+            id: message.id,
+            messageCount: 1,
+            replyCount: 0,
+            hasUnread: !message.isRead,
+            hasAttachments: message.hasAttachments,
+            hasVisibleAttachments: message.hasAttachments,
+            participants: [
+              MailConversationParticipant(name: '', email: message.sender),
+            ],
+            rootMessage: message,
+            replies: const [],
+            latestDate: message.receivedAt,
+            timelineMessages: [
+              MailConversationMessage(
+                message: message,
+                direction: MailConversationDirection.inbound,
+              ),
+            ],
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<List<MailConversation>> getUnifiedConversations({
+    required String accountId,
+    int limit = 50,
+    bool forceRefresh = false,
+  }) async {
+    final inbox = domain.MailFolder(
+      id: _folderId(accountId, 'INBOX'),
+      name: 'INBOX',
+      path: 'INBOX',
+      isInbox: true,
+    );
+    return getConversations(
+      accountId: accountId,
+      folder: inbox,
+      limit: limit,
+      forceRefresh: forceRefresh,
+    );
+  }
+
+  @override
   Future<MailMessagePage> getMessagePage({
     required String accountId,
     required domain.MailFolder folder,
@@ -369,56 +448,87 @@ class MailboxRepositoryImpl implements MailboxRepository {
     );
   }
 
-  @override
-  Future<List<MailConversation>> getUnifiedConversations({
+  Future<List<MailConversation>?> _fetchBackendConversations({
     required String accountId,
-    int limit = 50,
-    bool forceRefresh = false,
+    required domain.MailFolder folder,
+    required int limit,
   }) async {
-    final remoteConversations = await _fetchBackendUnifiedConversations(
-      accountId: accountId,
-      limit: limit,
-    );
-    if (remoteConversations != null) {
-      return remoteConversations;
+    final token = await _authToken(accountId);
+    if (token == null) {
+      return null;
     }
 
-    final inbox = domain.MailFolder(
-      id: _folderId(accountId, 'INBOX'),
-      name: 'INBOX',
-      path: 'INBOX',
-      isInbox: true,
+    final response = await _backendMailApiClient!.conversations(
+      token: token,
+      folder: folder.path,
+      limit: limit,
     );
-    final page = await getMessagePage(
-      accountId: accountId,
-      folder: inbox,
-      pageSize: limit,
-      forceRefresh: forceRefresh,
+    final allMessages = <BackendMessageSummaryDto>[
+      for (final conversation in response.conversations) ...[
+        conversation.rootMessage,
+        ...conversation.replies,
+      ],
+    ];
+    final cachedSummaries = await _cacheBackendSummaries(
+      accountId,
+      folder,
+      allMessages,
     );
-    return page.messages.map((message) {
+    final summariesById = {
+      for (final summary in cachedSummaries) summary.id: summary,
+    };
+
+    return response.conversations.map((conversation) {
+      final rootId = _messageId(
+        accountId,
+        conversation.rootMessage.folder.isEmpty
+            ? folder.path
+            : conversation.rootMessage.folder,
+        conversation.rootMessage.uid,
+      );
+      final root =
+          summariesById[rootId] ??
+          _summaryFromBackendMessage(
+            accountId,
+            folder,
+            conversation.rootMessage,
+          );
+      final replies = conversation.replies.map((reply) {
+        final replyId = _messageId(
+          accountId,
+          reply.folder.isEmpty ? folder.path : reply.folder,
+          reply.uid,
+        );
+        return summariesById[replyId] ??
+            _summaryFromBackendMessage(accountId, folder, reply);
+      }).toList();
       return MailConversation(
-        id: message.id,
-        messageCount: 1,
-        replyCount: 0,
-        hasUnread: !message.isRead,
-        hasAttachments: message.hasAttachments,
-        hasVisibleAttachments: message.hasAttachments,
-        participants: [
-          MailConversationParticipant(name: '', email: message.sender),
-        ],
-        messages: [
-          MailConversationMessage(
-            message: message,
-            direction: MailConversationDirection.inbound,
-          ),
-        ],
-        latestDate: message.receivedAt,
+        id: conversation.conversationId.isEmpty
+            ? root.id
+            : conversation.conversationId,
+        messageCount: conversation.messageCount,
+        replyCount: conversation.replyCount,
+        hasUnread: conversation.hasUnread,
+        hasAttachments: conversation.hasAttachments,
+        hasVisibleAttachments: conversation.hasVisibleAttachments,
+        participants: conversation.participants
+            .map(
+              (participant) => MailConversationParticipant(
+                name: participant.name,
+                email: participant.email,
+              ),
+            )
+            .toList(),
+        rootMessage: root,
+        replies: replies,
+        latestDate: conversation.latestDate ?? root.receivedAt,
       );
     }).toList();
   }
 
   Future<List<MailConversation>?> _fetchBackendUnifiedConversations({
     required String accountId,
+    required domain.MailFolder fallbackFolder,
     required int limit,
   }) async {
     final token = await _authToken(accountId);
@@ -449,19 +559,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
       }
     }
 
-    final inbox = domain.MailFolder(
-      id: _folderId(accountId, 'INBOX'),
-      name: 'INBOX',
-      path: 'INBOX',
-      isInbox: true,
-    );
     final allMessages = <BackendMessageSummaryDto>[
       for (final conversation in response.conversations)
         for (final message in conversation.messages) message.summary,
     ];
     final cachedSummaries = await _cacheBackendSummaries(
       accountId,
-      inbox,
+      fallbackFolder,
       allMessages,
     );
     final summariesById = {
@@ -469,27 +573,46 @@ class MailboxRepositoryImpl implements MailboxRepository {
     };
 
     return response.conversations.map((conversation) {
-      final messages = conversation.messages.map((message) {
+      final timelineMessages = conversation.messages.map((message) {
         final summary = message.summary;
-        final folderPath = summary.folder.isEmpty ? inbox.path : summary.folder;
-        final id = _messageId(accountId, folderPath, summary.uid);
+        final id = _messageId(
+          accountId,
+          summary.folder.isEmpty ? fallbackFolder.path : summary.folder,
+          summary.uid,
+        );
         return MailConversationMessage(
           message:
               summariesById[id] ??
-              _summaryFromBackendMessage(accountId, inbox, summary),
+              _summaryFromBackendMessage(accountId, fallbackFolder, summary),
           direction: _conversationDirection(message.direction),
         );
       }).toList();
-      final firstMessage = messages.isEmpty ? null : messages.first.message;
+      final root = timelineMessages.isEmpty
+          ? MailMessageSummary(
+              id: conversation.conversationId,
+              folderId: fallbackFolder.id,
+              subject: '',
+              sender: '',
+              preview: '',
+              receivedAt: conversation.latestDate ?? DateTime.now(),
+              isRead: !conversation.hasUnread,
+              hasAttachments: conversation.hasVisibleAttachments,
+              sequence: 0,
+            )
+          : timelineMessages.first.message;
+      final replies = timelineMessages
+          .skip(1)
+          .map((message) => message.message)
+          .toList();
       return MailConversation(
         id: conversation.conversationId.isEmpty
-            ? firstMessage?.id ?? ''
+            ? root.id
             : conversation.conversationId,
         messageCount: conversation.messageCount == 0
-            ? messages.length
+            ? timelineMessages.length
             : conversation.messageCount,
-        replyCount: conversation.replyCount == 0 && messages.isNotEmpty
-            ? messages.length - 1
+        replyCount: conversation.replyCount == 0 && timelineMessages.isNotEmpty
+            ? timelineMessages.length - 1
             : conversation.replyCount,
         hasUnread: conversation.hasUnread,
         hasAttachments: conversation.hasAttachments,
@@ -502,11 +625,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
               ),
             )
             .toList(),
-        messages: messages,
-        latestDate:
-            conversation.latestDate ??
-            firstMessage?.receivedAt ??
-            DateTime.now(),
+        rootMessage: root,
+        replies: replies,
+        latestDate: conversation.latestDate ?? root.receivedAt,
+        timelineMessages: timelineMessages,
       );
     }).toList();
   }
@@ -554,20 +676,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     List<BackendMessageSummaryDto> messages,
   ) async {
     final summaries = messages.map((message) {
-      final folderPath = message.folder.isEmpty ? folder.path : message.folder;
-      final folderId = _folderId(accountId, folderPath);
-      return MailMessageSummary(
-        id: _messageId(accountId, folderPath, message.uid),
-        folderId: folderId,
-        subject: _subject(message.subject),
-        sender: _sender(message.sender),
-        preview: _preview(message.subject),
-        receivedAt: message.date ?? DateTime.now(),
-        isRead: _hasFlag(message.flags, 'seen'),
-        isImportant: _hasFlag(message.flags, 'flagged'),
-        hasAttachments: message.hasVisibleAttachments ?? message.hasAttachments,
-        sequence: int.tryParse(message.uid) ?? 0,
-      );
+      return _summaryFromBackendMessage(accountId, folder, message);
     }).toList();
 
     final existingRows = summaries.isEmpty

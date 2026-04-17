@@ -98,6 +98,42 @@ class DeviceRegistrationService {
   final String _platform;
   final Logger? _logger;
 
+  Future<Map<String, bool>> registerAccounts(List<MailAccount> accounts) async {
+    if (!_config.isConfigured) {
+      _logger?.i('FCM device registration skipped: config is missing.');
+      return {for (final account in accounts) account.id: false};
+    }
+    if (accounts.isEmpty) {
+      return const {};
+    }
+
+    try {
+      await _permissionRequester();
+      final token = await _fcmTokenLoader();
+      if (token == null || token.trim().isEmpty) {
+        _logger?.w('FCM device registration skipped: token is unavailable.');
+        return {for (final account in accounts) account.id: false};
+      }
+      final appVersion = await _appVersionLoader();
+      final results = <String, bool>{};
+      for (final account in accounts) {
+        results[account.id] = await _registerAccountWithToken(
+          account: account,
+          fcmToken: token.trim(),
+          appVersion: appVersion,
+        );
+      }
+      return results;
+    } catch (error, stackTrace) {
+      _logger?.w(
+        'FCM device registration threw while preparing bulk registration.',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      return {for (final account in accounts) account.id: false};
+    }
+  }
+
   Future<bool> registerAccount(MailAccount account) async {
     if (!_config.isConfigured) {
       _logger?.i('FCM device registration skipped: config is missing.');
@@ -111,6 +147,27 @@ class DeviceRegistrationService {
         _logger?.w('FCM device registration skipped: token is unavailable.');
         return false;
       }
+      return _registerAccountWithToken(
+        account: account,
+        fcmToken: token.trim(),
+        appVersion: await _appVersionLoader(),
+      );
+    } catch (error, stackTrace) {
+      _logger?.w(
+        'FCM device registration threw for ${account.email}.',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      return false;
+    }
+  }
+
+  Future<bool> _registerAccountWithToken({
+    required MailAccount account,
+    required String fcmToken,
+    required String appVersion,
+  }) async {
+    try {
       final authToken = await _authTokenLoader(account.id);
       if (authToken == null || authToken.trim().isEmpty) {
         _logger?.w(
@@ -132,9 +189,9 @@ class DeviceRegistrationService {
         },
         body: jsonEncode({
           'account_email': account.email,
-          'fcm_token': token,
+          'fcm_token': fcmToken,
           'platform': _platform,
-          'app_version': await _appVersionLoader(),
+          'app_version': appVersion,
         }),
       );
 

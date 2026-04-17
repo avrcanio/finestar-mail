@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
 import '../../auth/domain/entities/mail_account.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../domain/entities/account_summary.dart';
 
 const _screenBackground = Color(0xFFF7F8FC);
 const _primary = Color(0xFF153B52);
@@ -19,6 +21,8 @@ class SettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final accountsAsync = ref.watch(accountsProvider);
     final activeAccountAsync = ref.watch(activeAccountProvider);
+    final summaries =
+        ref.watch(accountSummariesProvider).asData?.value ?? const {};
 
     return Scaffold(
       backgroundColor: _screenBackground,
@@ -53,6 +57,7 @@ class SettingsScreen extends ConsumerWidget {
                           padding: const EdgeInsets.only(bottom: 14),
                           child: _AccountCard(
                             account: account,
+                            summary: summaries[account.email.toLowerCase()],
                             isActive: account.id == activeAccount?.id,
                             onTap: () => _setActiveAccount(
                               context: context,
@@ -100,6 +105,7 @@ class SettingsScreen extends ConsumerWidget {
         .setActiveAccount(account.id);
     ref.invalidate(accountsProvider);
     ref.invalidate(activeAccountProvider);
+    ref.invalidate(accountSummariesProvider);
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${account.email} is now active.')),
@@ -116,6 +122,7 @@ class SettingsScreen extends ConsumerWidget {
     await ref.read(authControllerProvider.notifier).removeAccount(account.id);
     ref.invalidate(accountsProvider);
     ref.invalidate(activeAccountProvider);
+    ref.invalidate(accountSummariesProvider);
     if (context.mounted && accountCount == 1) {
       context.go(AppRoute.login.path);
     }
@@ -168,12 +175,14 @@ class _SettingsTopBar extends StatelessWidget {
 class _AccountCard extends StatelessWidget {
   const _AccountCard({
     required this.account,
+    required this.summary,
     required this.isActive,
     required this.onTap,
     required this.onRemove,
   });
 
   final MailAccount account;
+  final AccountSummary? summary;
   final bool isActive;
   final VoidCallback onTap;
   final VoidCallback onRemove;
@@ -242,6 +251,11 @@ class _AccountCard extends StatelessWidget {
                         letterSpacing: .2,
                       ),
                     ),
+                    const SizedBox(height: 10),
+                    _AccountCounters(
+                      unreadCount: summary?.unreadCount ?? 0,
+                      importantCount: summary?.importantCount ?? 0,
+                    ),
                   ],
                 ),
               ),
@@ -253,6 +267,77 @@ class _AccountCard extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AccountCounters extends StatelessWidget {
+  const _AccountCounters({
+    required this.unreadCount,
+    required this.importantCount,
+  });
+
+  final int unreadCount;
+  final int importantCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        _CounterChip(
+          icon: Icons.mark_email_unread_outlined,
+          label: 'Unread',
+          count: unreadCount,
+        ),
+        _CounterChip(
+          icon: Icons.star_border_rounded,
+          label: 'Important',
+          count: importantCount,
+        ),
+      ],
+    );
+  }
+}
+
+class _CounterChip extends StatelessWidget {
+  const _CounterChip({
+    required this.icon,
+    required this.label,
+    required this.count,
+  });
+
+  final IconData icon;
+  final String label;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F4F8),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: _primary),
+            const SizedBox(width: 5),
+            Text(
+              '$count $label',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: _primary,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: .2,
+              ),
+            ),
+          ],
         ),
       ),
     );

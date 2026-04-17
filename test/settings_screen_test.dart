@@ -5,6 +5,7 @@ import 'package:finestar_mail/core/theme/app_theme.dart';
 import 'package:finestar_mail/features/auth/domain/entities/connection_settings.dart';
 import 'package:finestar_mail/features/auth/domain/entities/mail_account.dart';
 import 'package:finestar_mail/features/auth/domain/repositories/auth_repository.dart';
+import 'package:finestar_mail/features/settings/domain/entities/account_summary.dart';
 import 'package:finestar_mail/features/settings/presentation/settings_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,6 +26,10 @@ void main() {
     expect(find.text('backup@finestar.hr'), findsOneWidget);
     expect(find.text('Active'), findsOneWidget);
     expect(find.text('Add another account'), findsOneWidget);
+    expect(find.text('12 Unread'), findsOneWidget);
+    expect(find.text('3 Important'), findsOneWidget);
+    expect(find.text('0 Unread'), findsOneWidget);
+    expect(find.text('0 Important'), findsOneWidget);
 
     expect(find.text('Finestar docker mailer'), findsNothing);
     expect(
@@ -103,7 +108,19 @@ Widget _buildTestApp(_FakeAuthRepository repository) {
   );
 
   return ProviderScope(
-    overrides: [authRepositoryProvider.overrideWith((ref) => repository)],
+    overrides: [
+      authRepositoryProvider.overrideWith((ref) => repository),
+      accountSummariesProvider.overrideWith((ref) async {
+        return const {
+          'avrcan@finestar.hr': AccountSummary(
+            accountEmail: 'avrcan@finestar.hr',
+            displayName: 'Ante Vrcan',
+            unreadCount: 12,
+            importantCount: 3,
+          ),
+        };
+      }),
+    ],
     child: MaterialApp.router(theme: buildAppTheme(), routerConfig: router),
   );
 }
@@ -152,13 +169,12 @@ class _FakeAuthRepository implements AuthRepository {
     required String email,
     required String displayName,
     required String password,
-    required ConnectionSettings settings,
   }) async {
     final account = MailAccount(
       id: email,
       email: email,
       displayName: displayName,
-      connectionSettings: settings,
+      connectionSettings: _settings,
       createdAt: DateTime(2026, 4, 16),
     );
     accounts.add(account);
@@ -185,14 +201,5 @@ class _FakeAuthRepository implements AuthRepository {
   Future<void> setActiveAccount(String accountId) async {
     setActiveAccountCalls++;
     activeAccount = accounts.firstWhere((account) => account.id == accountId);
-  }
-
-  @override
-  Future<Result<void>> testConnection({
-    required String email,
-    required String password,
-    required ConnectionSettings settings,
-  }) async {
-    return const Success(null);
   }
 }

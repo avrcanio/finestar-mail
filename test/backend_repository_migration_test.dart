@@ -50,7 +50,6 @@ void main() {
       email: 'APP-TEST-1@finestar.hr',
       displayName: 'App Test',
       password: 'secret',
-      settings: _settings,
     );
 
     expect(result, isA<Success>());
@@ -63,6 +62,8 @@ void main() {
       database.accounts,
     )..where((table) => table.id.equals('app-test-1@finestar.hr'))).getSingle();
     expect(account.email, 'app-test-1@finestar.hr');
+    expect(account.imapHost, isEmpty);
+    expect(account.smtpHost, isEmpty);
   });
 
   test(
@@ -323,6 +324,186 @@ void main() {
       );
       expect(
         requests.any((uri) => uri.path.endsWith('/attachments/img_2')),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'mailbox repository renders TELWIN cid images and shows only visible PDFs',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      final storage = _MemorySecureStorageService();
+      addTearDown(database.close);
+      await storage.saveAuthToken(
+        accountId: 'app-test-1@finestar.hr',
+        token: 'backend-token',
+      );
+      final requests = <Uri>[];
+      final cidImages = [
+        for (var index = 2; index <= 8; index++)
+          'image${index.toString().padLeft(3, '0')}.jpg@example.test',
+      ];
+      final htmlImages = cidImages
+          .map((contentId) => '<img src="cid:$contentId">')
+          .join();
+
+      final repository = MailboxRepositoryImpl(
+        appDatabase: database,
+        secureStorageService: storage,
+        backendMailApiClient: BackendMailApiClient(
+          httpClient: MockClient((request) async {
+            requests.add(request.url);
+            expect(request.headers['Authorization'], 'Token backend-token');
+            if (request.url.path == '/api/mail/messages') {
+              return http.Response(
+                jsonEncode({
+                  'account_email': 'app-test-1@finestar.hr',
+                  'folder': 'INBOX',
+                  'messages': [
+                    {
+                      'uid': '43',
+                      'folder': 'INBOX',
+                      'subject': 'Mixed attachments',
+                      'sender': 'Sender <sender@example.test>',
+                      'to': ['app-test-1@finestar.hr'],
+                      'cc': [],
+                      'date': '2026-04-16T07:00:00Z',
+                      'message_id': '<m2@example.test>',
+                      'flags': ['Seen'],
+                      'size': 123,
+                      'has_attachments': true,
+                      'has_visible_attachments': true,
+                    },
+                  ],
+                  'has_more': false,
+                  'next_before_uid': null,
+                }),
+                200,
+              );
+            }
+            if (request.url.path.contains('/attachments/img_')) {
+              expect(request.url.queryParameters['folder'], 'INBOX');
+              final isGif = request.url.path.endsWith('/attachments/img_3');
+              return http.Response.bytes(
+                [1, 2, 3],
+                200,
+                headers: {'content-type': isGif ? 'image/gif' : 'image/jpeg'},
+              );
+            }
+            return http.Response(
+              jsonEncode({
+                'account_email': 'app-test-1@finestar.hr',
+                'folder': 'INBOX',
+                'message': {
+                  'uid': '43',
+                  'folder': 'INBOX',
+                  'subject': 'Mixed attachments',
+                  'sender': 'Sender <sender@example.test>',
+                  'to': ['app-test-1@finestar.hr'],
+                  'cc': [],
+                  'date': '2026-04-16T07:00:00Z',
+                  'message_id': '<m2@example.test>',
+                  'flags': ['Seen'],
+                  'size': 123,
+                  'has_attachments': true,
+                  'has_visible_attachments': true,
+                  'text_body': 'Mixed body',
+                  'html_body': '<p>$htmlImages</p>',
+                  'attachments': [
+                    for (var index = 0; index < cidImages.length; index++)
+                      {
+                        'id': 'img_${index + 1}',
+                        'filename':
+                            'image${(index + 2).toString().padLeft(3, '0')}.jpg',
+                        'content_type': index == 2 ? 'image/gif' : 'image/jpeg',
+                        'size': 3,
+                        'disposition': null,
+                        'is_inline': false,
+                        'content_id': cidImages[index],
+                        'is_visible': false,
+                      },
+                    {
+                      'id': 'img_duplicate',
+                      'filename': 'Outlook-logo.png',
+                      'content_type': 'image/png',
+                      'size': 3,
+                      'disposition': 'attachment',
+                      'is_inline': false,
+                      'content_id': 'duplicate@example.test',
+                      'is_visible': false,
+                    },
+                    {
+                      'id': 'pdf_1',
+                      'filename': "Otpremnice_ 'DeMa Team 2026-194.pdf",
+                      'content_type': 'application/pdf',
+                      'size': 10,
+                      'disposition': 'attachment',
+                      'is_inline': false,
+                      'content_id': '',
+                      'is_visible': true,
+                    },
+                    {
+                      'id': 'pdf_2',
+                      'filename': '194-1-26.pdf',
+                      'content_type': 'application/pdf',
+                      'size': 11,
+                      'disposition': 'attachment',
+                      'is_inline': false,
+                      'content_id': '',
+                      'is_visible': true,
+                    },
+                  ],
+                },
+              }),
+              200,
+            );
+          }),
+          baseUrlLoader: () async => 'https://mail.example.test',
+        ),
+      );
+
+      const folder = MailFolder(
+        id: 'app-test-1@finestar.hr:inbox',
+        name: 'INBOX',
+        path: 'INBOX',
+        isInbox: true,
+      );
+      final summaries = await repository.getMessages(
+        accountId: 'app-test-1@finestar.hr',
+        folder: folder,
+        forceRefresh: true,
+      );
+      expect(summaries.single.hasAttachments, isTrue);
+
+      final detail = await repository.getMessageDetail(
+        accountId: 'app-test-1@finestar.hr',
+        id: summaries.single.id,
+      );
+
+      expect(
+        'data:image/jpeg;base64,AQID'.allMatches(detail.bodyHtml!).length,
+        6,
+      );
+      expect(detail.bodyHtml, contains('data:image/gif;base64,AQID'));
+      expect(detail.attachments.map((attachment) => attachment.filename), [
+        "Otpremnice_ 'DeMa Team 2026-194.pdf",
+        '194-1-26.pdf',
+      ]);
+      expect(
+        detail.attachments.every((attachment) => attachment.isVisible == true),
+        isTrue,
+      );
+      expect(
+        requests.where((uri) => uri.path.contains('/attachments/img_')).length,
+        7,
+      );
+      expect(
+        requests.any((uri) => uri.path.endsWith('/attachments/img_duplicate')),
+        isFalse,
+      );
+      expect(
+        requests.any((uri) => uri.path.endsWith('/attachments/pdf_1')),
         isFalse,
       );
     },
@@ -1204,6 +1385,121 @@ void main() {
       expect(
         details.single.recipients,
         'client@example.test,copy@example.test,hidden@example.test',
+      );
+    },
+  );
+
+  test(
+    'mailbox repository maps unified conversations and caches timeline messages',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      final storage = _MemorySecureStorageService();
+      addTearDown(database.close);
+      await storage.saveAuthToken(
+        accountId: 'app-test-1@finestar.hr',
+        token: 'backend-token',
+      );
+
+      final repository = MailboxRepositoryImpl(
+        appDatabase: database,
+        secureStorageService: storage,
+        backendMailApiClient: BackendMailApiClient(
+          httpClient: MockClient((request) async {
+            expect(request.url.path, '/api/mail/unified-conversations');
+            expect(request.url.queryParameters, {'limit': '50'});
+            return http.Response(
+              jsonEncode({
+                'account_email': 'app-test-1@finestar.hr',
+                'folders': [
+                  {'name': 'INBOX', 'path': 'INBOX'},
+                  {'name': 'Sent', 'path': 'Sent'},
+                ],
+                'conversations': [
+                  {
+                    'conversation_id': 'thread-1',
+                    'message_count': 2,
+                    'reply_count': 1,
+                    'has_unread': true,
+                    'has_attachments': true,
+                    'has_visible_attachments': true,
+                    'participants': [
+                      {'name': 'Client', 'email': 'client@example.test'},
+                    ],
+                    'latest_date': '2026-04-17T10:00:00Z',
+                    'messages': [
+                      {
+                        'uid': '40',
+                        'folder': 'INBOX',
+                        'direction': 'inbound',
+                        'subject': 'Conversation root',
+                        'sender': 'Client <client@example.test>',
+                        'to': ['app-test-1@finestar.hr'],
+                        'cc': [],
+                        'date': '2026-04-17T08:00:00Z',
+                        'message_id': '<root@example.test>',
+                        'flags': [],
+                        'size': 123,
+                        'has_attachments': false,
+                        'has_visible_attachments': false,
+                      },
+                      {
+                        'uid': '41',
+                        'folder': 'Sent',
+                        'direction': 'outbound',
+                        'subject': 'Re: Conversation root',
+                        'sender': 'app-test-1@finestar.hr',
+                        'to': ['client@example.test'],
+                        'cc': [],
+                        'date': '2026-04-17T10:00:00Z',
+                        'message_id': '<reply@example.test>',
+                        'flags': ['Seen'],
+                        'size': 456,
+                        'has_attachments': true,
+                        'has_visible_attachments': true,
+                      },
+                    ],
+                  },
+                ],
+              }),
+              200,
+            );
+          }),
+          baseUrlLoader: () async => 'https://mail.example.test',
+        ),
+      );
+
+      const folder = MailFolder(
+        id: 'app-test-1@finestar.hr:inbox',
+        name: 'INBOX',
+        path: 'INBOX',
+        isInbox: true,
+      );
+      final conversations = await repository.getConversations(
+        accountId: 'app-test-1@finestar.hr',
+        folder: folder,
+      );
+
+      expect(conversations.single.id, 'thread-1');
+      expect(conversations.single.rootMessage.id, endsWith(':api:40'));
+      expect(conversations.single.replies.single.id, contains(':sent:api:41'));
+      expect(
+        conversations.single.timelineMessages.last.direction,
+        MailConversationDirection.outbound,
+      );
+      expect(conversations.single.hasUnread, isTrue);
+      expect(conversations.single.hasVisibleAttachments, isTrue);
+      expect(
+        conversations.single.participants.single.email,
+        'client@example.test',
+      );
+
+      final cachedRows = await database.select(database.messageSummaries).get();
+      expect(
+        cachedRows.map((row) => row.id),
+        containsAll([
+          'app-test-1@finestar.hr:inbox:api:40',
+          'app-test-1@finestar.hr:sent:api:41',
+        ]),
       );
     },
   );

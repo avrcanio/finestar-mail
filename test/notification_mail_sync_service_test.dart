@@ -19,6 +19,7 @@ void main() {
     final repository = _FakeMailboxRepository();
     final service = NotificationMailSyncService(
       activeAccountLoader: () async => _account,
+      accountsLoader: () async => [_account, _otherAccount],
       mailboxRepository: repository,
     );
 
@@ -32,11 +33,12 @@ void main() {
   });
 
   test(
-    'syncInboxForPayload ignores notifications for another account',
+    'syncInboxForPayload syncs notifications for another local account',
     () async {
       final repository = _FakeMailboxRepository();
       final service = NotificationMailSyncService(
         activeAccountLoader: () async => _account,
+        accountsLoader: () async => [_account, _otherAccount],
         mailboxRepository: repository,
       );
 
@@ -44,8 +46,8 @@ void main() {
         const MailNotificationPayload(accountEmail: 'other@finestar.hr'),
       );
 
-      expect(synced, isFalse);
-      expect(repository.syncedAccountIds, isEmpty);
+      expect(synced, isTrue);
+      expect(repository.syncedAccountIds, ['other@finestar.hr']);
     },
   );
 
@@ -53,6 +55,7 @@ void main() {
     final repository = _FakeMailboxRepository();
     final service = NotificationMailSyncService(
       activeAccountLoader: () async => null,
+      accountsLoader: () async => const [],
       mailboxRepository: repository,
     );
 
@@ -68,6 +71,7 @@ void main() {
     final repository = _FakeMailboxRepository(throwOnSync: true);
     final service = NotificationMailSyncService(
       activeAccountLoader: () async => _account,
+      accountsLoader: () async => [_account],
       mailboxRepository: repository,
     );
 
@@ -78,12 +82,46 @@ void main() {
     expect(synced, isFalse);
     expect(repository.syncedAccountIds, ['avrcan@finestar.hr']);
   });
+
+  test(
+    'syncInboxForPayload does not sync an unknown payload account',
+    () async {
+      final repository = _FakeMailboxRepository();
+      final service = NotificationMailSyncService(
+        activeAccountLoader: () async => _account,
+        accountsLoader: () async => [_account],
+        mailboxRepository: repository,
+      );
+
+      final synced = await service.syncInboxForPayload(
+        const MailNotificationPayload(accountEmail: 'missing@finestar.hr'),
+      );
+
+      expect(synced, isFalse);
+      expect(repository.syncedAccountIds, isEmpty);
+    },
+  );
 }
 
 final _account = MailAccount(
   id: 'avrcan@finestar.hr',
   email: 'avrcan@finestar.hr',
   displayName: 'Ante Vrcan',
+  connectionSettings: const ConnectionSettings(
+    imapHost: 'mail.finestar.hr',
+    imapPort: 993,
+    imapSecurity: MailSecurity.sslTls,
+    smtpHost: 'mail.finestar.hr',
+    smtpPort: 465,
+    smtpSecurity: MailSecurity.sslTls,
+  ),
+  createdAt: DateTime(2026, 4, 16),
+);
+
+final _otherAccount = MailAccount(
+  id: 'other@finestar.hr',
+  email: 'other@finestar.hr',
+  displayName: 'Other Mailbox',
   connectionSettings: const ConnectionSettings(
     imapHost: 'mail.finestar.hr',
     imapPort: 993,
@@ -165,6 +203,14 @@ class _FakeMailboxRepository implements MailboxRepository {
     required MailFolder folder,
     int page = 0,
     int pageSize = 20,
+    bool forceRefresh = false,
+  }) async => const [];
+
+  @override
+  Future<List<MailConversation>> getConversations({
+    required String accountId,
+    required MailFolder folder,
+    int limit = 50,
     bool forceRefresh = false,
   }) async => const [];
 

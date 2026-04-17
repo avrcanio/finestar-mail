@@ -154,11 +154,46 @@ void main() {
     expect(find.byIcon(Icons.attach_file), findsOneWidget);
   });
 
+  testWidgets('mailbox renders backend conversations expanded by default', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildTestApp(
+        repository: _FakeMailboxRepository(
+          threadedConversations: [_threadedConversation],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Thread root'), findsOneWidget);
+    expect(find.text('Thread reply one'), findsOneWidget);
+    expect(find.text('Thread reply two'), findsOneWidget);
+    expect(find.text('2 replies'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Thread reply one')).dx,
+      greaterThan(tester.getTopLeft(find.text('Thread root')).dx),
+    );
+  });
+
+  testWidgets('conversation reply tap opens reply detail row', (tester) async {
+    final repository = _FakeMailboxRepository(
+      threadedConversations: [_threadedConversation],
+    );
+    await tester.pumpWidget(_buildTestApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Thread reply one'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('detail:reply-1'), findsOneWidget);
+  });
+
   testWidgets('unified conversation renders outbound row and opens exact row', (
     tester,
   ) async {
     final repository = _FakeMailboxRepository(
-      unifiedConversations: [_unifiedConversation],
+      threadedConversations: [_unifiedConversation],
     );
     await tester.pumpWidget(_buildTestApp(repository: repository));
     await tester.pumpAndSettle();
@@ -174,11 +209,9 @@ void main() {
     expect(find.text('detail:unified-sent-1'), findsOneWidget);
   });
 
-  testWidgets('unified conversation reply selection targets reply row', (
-    tester,
-  ) async {
+  testWidgets('conversation reply selection targets reply row', (tester) async {
     final repository = _FakeMailboxRepository(
-      unifiedConversations: [_unifiedConversation],
+      threadedConversations: [_threadedConversation],
     );
     await tester.pumpWidget(_buildTestApp(repository: repository));
     await tester.pumpAndSettle();
@@ -186,7 +219,7 @@ void main() {
     await tester.tap(
       find.descendant(
         of: find.ancestor(
-          of: find.text('Unified sent reply'),
+          of: find.text('Thread reply two'),
           matching: find.byType(ListTile),
         ),
         matching: find.byType(CircleAvatar),
@@ -198,7 +231,7 @@ void main() {
     await tester.tap(find.byTooltip('Move selected to Trash'));
     await tester.pumpAndSettle();
 
-    expect(repository.deletedMessageIds, ['unified-sent-1']);
+    expect(repository.deletedMessageIds, ['reply-2']);
   });
 
   testWidgets('avatar opens account management route', (tester) async {
@@ -252,7 +285,7 @@ void main() {
     expect(repository.messages.first.isRead, isTrue);
   });
 
-  testWidgets('unified inbox list does not request flat cursor pagination', (
+  testWidgets('conversation list does not request flat cursor pagination', (
     tester,
   ) async {
     final repository = _FakeMailboxRepository(initialMessageCount: 24);
@@ -397,6 +430,58 @@ const _inboxFolder = MailFolder(
   isInbox: true,
 );
 
+final _threadRoot = MailMessageSummary(
+  id: 'root-1',
+  folderId: 'app-test-2@finestar.hr:inbox',
+  subject: 'Thread root',
+  sender: 'client@finestar.hr',
+  preview: 'Root preview',
+  receivedAt: DateTime(2026, 4, 16, 8),
+  isRead: false,
+  isImportant: true,
+  hasAttachments: false,
+  sequence: 20,
+);
+
+final _threadReplyOne = MailMessageSummary(
+  id: 'reply-1',
+  folderId: 'app-test-2@finestar.hr:inbox',
+  subject: 'Thread reply one',
+  sender: 'app-test-2@finestar.hr',
+  preview: 'First reply preview',
+  receivedAt: DateTime(2026, 4, 16, 9),
+  isRead: true,
+  hasAttachments: false,
+  sequence: 21,
+);
+
+final _threadReplyTwo = MailMessageSummary(
+  id: 'reply-2',
+  folderId: 'app-test-2@finestar.hr:inbox',
+  subject: 'Thread reply two',
+  sender: 'client@finestar.hr',
+  preview: 'Second reply preview',
+  receivedAt: DateTime(2026, 4, 16, 10),
+  isRead: true,
+  hasAttachments: true,
+  sequence: 22,
+);
+
+final _threadedConversation = MailConversation(
+  id: 'conversation-1',
+  messageCount: 3,
+  replyCount: 2,
+  hasUnread: true,
+  hasAttachments: true,
+  hasVisibleAttachments: true,
+  participants: const [
+    MailConversationParticipant(name: 'Client', email: 'client@finestar.hr'),
+  ],
+  rootMessage: _threadRoot,
+  replies: [_threadReplyOne, _threadReplyTwo],
+  latestDate: DateTime(2026, 4, 16, 10),
+);
+
 final _unifiedRoot = MailMessageSummary(
   id: 'unified-root-1',
   folderId: 'app-test-2@finestar.hr:inbox',
@@ -431,7 +516,10 @@ final _unifiedConversation = MailConversation(
   participants: const [
     MailConversationParticipant(name: 'Client', email: 'client@finestar.hr'),
   ],
-  messages: [
+  rootMessage: _unifiedRoot,
+  replies: [_unifiedSentReply],
+  latestDate: DateTime(2026, 4, 16, 9),
+  timelineMessages: [
     MailConversationMessage(
       message: _unifiedRoot,
       direction: MailConversationDirection.inbound,
@@ -441,14 +529,13 @@ final _unifiedConversation = MailConversation(
       direction: MailConversationDirection.outbound,
     ),
   ],
-  latestDate: DateTime(2026, 4, 16, 9),
 );
 
 class _FakeMailboxRepository implements MailboxRepository {
   _FakeMailboxRepository({
     int initialMessageCount = 2,
     bool backendIds = false,
-    this.unifiedConversations,
+    this.threadedConversations,
   }) : messages = [
          MailMessageSummary(
            id: backendIds
@@ -498,7 +585,7 @@ class _FakeMailboxRepository implements MailboxRepository {
        ];
 
   final List<MailMessageSummary> messages;
-  final List<MailConversation>? unifiedConversations;
+  final List<MailConversation>? threadedConversations;
   final trashMessages = <MailMessageSummary>[
     MailMessageSummary(
       id: 'app-test-2@finestar.hr:trash:api:2',
@@ -590,39 +677,6 @@ class _FakeMailboxRepository implements MailboxRepository {
   }) async => const [];
 
   @override
-  Future<List<MailConversation>> getUnifiedConversations({
-    required String accountId,
-    int limit = 50,
-    bool forceRefresh = false,
-  }) async {
-    if (unifiedConversations != null) {
-      return unifiedConversations!;
-    }
-    return messages
-        .map(
-          (message) => MailConversation(
-            id: message.id,
-            messageCount: 1,
-            replyCount: 0,
-            hasUnread: !message.isRead,
-            hasAttachments: message.hasAttachments,
-            hasVisibleAttachments: message.hasAttachments,
-            participants: [
-              MailConversationParticipant(name: '', email: message.sender),
-            ],
-            messages: [
-              MailConversationMessage(
-                message: message,
-                direction: MailConversationDirection.inbound,
-              ),
-            ],
-            latestDate: message.receivedAt,
-          ),
-        )
-        .toList();
-  }
-
-  @override
   Future<List<MailMessageSummary>> getMessages({
     required String accountId,
     required MailFolder folder,
@@ -680,6 +734,57 @@ class _FakeMailboxRepository implements MailboxRepository {
       ];
     }
     return messages;
+  }
+
+  @override
+  Future<List<MailConversation>> getConversations({
+    required String accountId,
+    required MailFolder folder,
+    int limit = 50,
+    bool forceRefresh = false,
+  }) async {
+    if (threadedConversations != null && folder.path == 'INBOX') {
+      requestedFolderPaths.add(folder.path);
+      return threadedConversations!;
+    }
+    final folderMessages = await getMessages(
+      accountId: accountId,
+      folder: folder,
+      pageSize: limit,
+      forceRefresh: forceRefresh,
+    );
+    return folderMessages
+        .map(
+          (message) => MailConversation(
+            id: message.id,
+            messageCount: 1,
+            replyCount: 0,
+            hasUnread: !message.isRead,
+            hasAttachments: message.hasAttachments,
+            hasVisibleAttachments: message.hasAttachments,
+            participants: [
+              MailConversationParticipant(name: '', email: message.sender),
+            ],
+            rootMessage: message,
+            replies: const [],
+            latestDate: message.receivedAt,
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<List<MailConversation>> getUnifiedConversations({
+    required String accountId,
+    int limit = 50,
+    bool forceRefresh = false,
+  }) {
+    return getConversations(
+      accountId: accountId,
+      folder: _inboxFolder,
+      limit: limit,
+      forceRefresh: forceRefresh,
+    );
   }
 
   @override

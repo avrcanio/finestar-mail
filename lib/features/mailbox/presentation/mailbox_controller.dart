@@ -3,8 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/providers.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/entities/mail_delete_result.dart';
-import '../domain/entities/mail_conversation.dart';
 import '../domain/entities/mail_folder.dart';
+import '../domain/entities/mail_conversation.dart';
 import '../domain/entities/mail_message_detail.dart';
 import '../domain/entities/mail_message_page.dart';
 import '../domain/entities/mail_message_summary.dart';
@@ -209,8 +209,9 @@ class MailboxConversationsController
 
     final conversations = await ref
         .watch(mailboxRepositoryProvider)
-        .getUnifiedConversations(
+        .getConversations(
           accountId: account.id,
+          folder: folder,
           limit: limit,
           forceRefresh: forceRefresh,
         );
@@ -223,28 +224,38 @@ class MailboxConversationsController
   ) {
     return conversations
         .map((conversation) {
-          final remaining = conversation.messages
+          final remainingTimeline = conversation.messages
               .where((message) => !messageIds.contains(message.message.id))
               .toList();
-          if (remaining.isEmpty) {
+          if (remainingTimeline.isEmpty) {
             return null;
           }
+          final newRoot = remainingTimeline.first.message;
+          final newReplies = remainingTimeline
+              .skip(1)
+              .map((message) => message.message)
+              .toList();
           return MailConversation(
             id: conversation.id,
-            messageCount: remaining.length,
-            replyCount: remaining.length - 1,
-            hasUnread: remaining.any((message) => !message.message.isRead),
-            hasAttachments: remaining.any(
-              (message) => message.message.hasAttachments,
-            ),
-            hasVisibleAttachments: remaining.any(
-              (message) => message.message.hasAttachments,
-            ),
+            messageCount: remainingTimeline.length,
+            replyCount: newReplies.length,
+            hasUnread:
+                !newRoot.isRead || newReplies.any((reply) => !reply.isRead),
+            hasAttachments:
+                newRoot.hasAttachments ||
+                newReplies.any((reply) => reply.hasAttachments),
+            hasVisibleAttachments:
+                newRoot.hasAttachments ||
+                newReplies.any((reply) => reply.hasAttachments),
             participants: conversation.participants,
-            messages: remaining,
-            latestDate: remaining
-                .map((message) => message.message.receivedAt)
-                .reduce(_latestDate),
+            rootMessage: newRoot,
+            replies: newReplies,
+            latestDate: newReplies.isEmpty
+                ? newRoot.receivedAt
+                : newReplies
+                      .map((reply) => reply.receivedAt)
+                      .fold(newRoot.receivedAt, _latestDate),
+            timelineMessages: remainingTimeline,
           );
         })
         .whereType<MailConversation>()

@@ -10,6 +10,7 @@ import '../data/remote/backend_mail_api_client.dart';
 import '../data/secure/secure_storage_service.dart';
 import '../features/attachments/data/attachment_repository_impl.dart';
 import '../features/attachments/domain/repositories/attachment_repository.dart';
+import '../features/auth/data/backend_auth_token_selector.dart';
 import '../features/auth/data/auth_repository_impl.dart';
 import '../features/auth/domain/repositories/auth_repository.dart';
 import '../features/compose/data/compose_repository_impl.dart';
@@ -19,7 +20,9 @@ import '../features/mailbox/domain/repositories/mailbox_repository.dart';
 import '../features/notifications/data/device_registration_service.dart';
 import '../features/notifications/data/local_notification_service.dart';
 import '../features/notifications/data/notification_mail_sync_service.dart';
+import '../features/settings/data/account_summaries_repository.dart';
 import '../features/settings/data/settings_repository_impl.dart';
+import '../features/settings/domain/entities/account_summary.dart';
 import '../features/settings/domain/repositories/settings_repository.dart';
 
 final loggerProvider = Provider<Logger>((ref) {
@@ -65,6 +68,32 @@ final settingsRepositoryProvider = Provider<SettingsRepository>((ref) {
   return SettingsRepositoryImpl(
     authRepository: ref.watch(authRepositoryProvider),
   );
+});
+
+final backendAuthTokenSelectorProvider = Provider<BackendAuthTokenSelector>((
+  ref,
+) {
+  return BackendAuthTokenSelector(
+    authRepository: ref.watch(authRepositoryProvider),
+    secureStorageService: ref.watch(secureStorageServiceProvider),
+  );
+});
+
+final accountSummariesRepositoryProvider = Provider<AccountSummariesRepository>(
+  (ref) {
+    return AccountSummariesRepository(
+      backendMailApiClient: ref.watch(backendMailApiClientProvider),
+      backendAuthTokenSelector: ref.watch(backendAuthTokenSelectorProvider),
+      fcmTokenLoader: ref.watch(firebaseMessagingProvider).getToken,
+      logger: ref.watch(loggerProvider),
+    );
+  },
+);
+
+final accountSummariesProvider = FutureProvider<Map<String, AccountSummary>>((
+  ref,
+) {
+  return ref.watch(accountSummariesRepositoryProvider).fetchSummariesByEmail();
 });
 
 final attachmentRepositoryProvider = Provider<AttachmentRepository>((ref) {
@@ -127,6 +156,7 @@ final notificationMailSyncServiceProvider =
       return NotificationMailSyncService(
         activeAccountLoader: () =>
             ref.read(authRepositoryProvider).getActiveAccount(),
+        accountsLoader: () => ref.read(authRepositoryProvider).getAccounts(),
         mailboxRepository: ref.watch(mailboxRepositoryProvider),
         logger: ref.watch(loggerProvider),
       );

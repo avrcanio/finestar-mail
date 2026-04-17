@@ -216,6 +216,95 @@ void main() {
     },
   );
 
+  test(
+    'conversations sends folder limit and parses threaded payload',
+    () async {
+      http.Request? capturedRequest;
+      final client = BackendMailApiClient(
+        httpClient: MockClient((request) async {
+          capturedRequest = request;
+          expect(request.headers['Authorization'], 'Token session-token');
+          return http.Response(
+            jsonEncode({
+              'account_email': 'app-test-1@finestar.hr',
+              'folder': 'INBOX',
+              'conversations': [
+                {
+                  'conversation_id': 'thread-1',
+                  'message_count': 3,
+                  'reply_count': 2,
+                  'has_unread': true,
+                  'has_attachments': true,
+                  'has_visible_attachments': false,
+                  'participants': [
+                    {'name': 'Sender Name', 'email': 'sender@example.test'},
+                  ],
+                  'latest_date': '2026-04-17T10:00:00Z',
+                  'root_message': {
+                    'uid': '40',
+                    'folder': 'INBOX',
+                    'subject': 'Root',
+                    'sender': 'sender@example.test',
+                    'to': ['app-test-1@finestar.hr'],
+                    'cc': [],
+                    'date': '2026-04-17T08:00:00Z',
+                    'message_id': '<root@example.test>',
+                    'flags': [],
+                    'size': 123,
+                    'has_attachments': false,
+                    'has_visible_attachments': false,
+                  },
+                  'replies': [
+                    {
+                      'uid': '41',
+                      'folder': 'INBOX',
+                      'subject': 'Re: Root',
+                      'sender': 'app-test-1@finestar.hr',
+                      'to': ['sender@example.test'],
+                      'cc': [],
+                      'date': '2026-04-17T10:00:00Z',
+                      'message_id': '<reply@example.test>',
+                      'flags': ['Seen'],
+                      'size': 456,
+                      'has_attachments': true,
+                      'has_visible_attachments': true,
+                    },
+                  ],
+                },
+              ],
+            }),
+            200,
+          );
+        }),
+        baseUrlLoader: () async => 'https://mail.example.test',
+      );
+
+      final response = await client.conversations(
+        token: 'session-token',
+        folder: 'INBOX',
+        limit: 50,
+      );
+
+      expect(capturedRequest?.url.path, '/api/mail/conversations');
+      expect(capturedRequest?.url.queryParameters, {
+        'folder': 'INBOX',
+        'limit': '50',
+      });
+      final conversation = response.conversations.single;
+      expect(conversation.conversationId, 'thread-1');
+      expect(conversation.messageCount, 3);
+      expect(conversation.replyCount, 2);
+      expect(conversation.hasUnread, isTrue);
+      expect(conversation.hasAttachments, isTrue);
+      expect(conversation.hasVisibleAttachments, isFalse);
+      expect(conversation.participants.single.name, 'Sender Name');
+      expect(conversation.participants.single.email, 'sender@example.test');
+      expect(conversation.rootMessage.uid, '40');
+      expect(conversation.replies.single.uid, '41');
+      expect(conversation.latestDate, DateTime.parse('2026-04-17T10:00:00Z'));
+    },
+  );
+
   test('unifiedConversations parses timeline response', () async {
     http.Request? capturedRequest;
     final client = BackendMailApiClient(
@@ -335,6 +424,43 @@ void main() {
     expect(folder.parentPath, 'INBOX/Izvodi');
     expect(folder.depth, 2);
     expect(folder.selectable, isTrue);
+  });
+
+  test('account summaries sends fcm_token and parses counters', () async {
+    http.Request? capturedRequest;
+    final client = BackendMailApiClient(
+      httpClient: MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(
+          jsonEncode({
+            'accounts': [
+              {
+                'account_email': 'app-test-1@finestar.hr',
+                'display_name': 'App Test',
+                'unread_count': 12,
+                'important_count': 3,
+              },
+            ],
+          }),
+          200,
+        );
+      }),
+      baseUrlLoader: () async => 'https://mail.example.test',
+    );
+
+    final response = await client.accountSummaries(
+      token: 'session-token',
+      fcmToken: 'fcm-token',
+    );
+
+    expect(capturedRequest?.method, 'GET');
+    expect(capturedRequest?.url.path, '/api/accounts/summaries');
+    expect(capturedRequest?.url.queryParameters, {'fcm_token': 'fcm-token'});
+    expect(capturedRequest?.headers['Authorization'], 'Token session-token');
+    expect(response.accounts.single.accountEmail, 'app-test-1@finestar.hr');
+    expect(response.accounts.single.displayName, 'App Test');
+    expect(response.accounts.single.unreadCount, 12);
+    expect(response.accounts.single.importantCount, 3);
   });
 
   test('message detail parses attachment metadata', () async {

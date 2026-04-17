@@ -41,6 +41,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         database: database,
         secureStorageService: secureStorageService,
       ),
+      accountsLoader: () => loadMailAccounts(database: database),
       mailboxRepository: mailboxRepository,
     );
     await syncService.syncInboxForPayload(

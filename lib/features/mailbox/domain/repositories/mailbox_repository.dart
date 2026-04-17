@@ -19,6 +19,13 @@ abstract class MailboxRepository {
     bool forceRefresh = false,
   });
 
+  Future<List<MailConversation>> getConversations({
+    required String accountId,
+    required MailFolder folder,
+    int limit = 50,
+    bool forceRefresh = false,
+  });
+
   Future<MailMessagePage> getMessagePage({
     required String accountId,
     required MailFolder folder,
