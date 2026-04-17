@@ -225,9 +225,10 @@ void main() {
           filename: 'image002.png',
           contentType: 'image/png',
           sizeBytes: 4,
-          disposition: 'inline',
-          isInline: true,
+          disposition: 'attachment',
+          isInline: false,
           contentId: 'image002.png@example',
+          isVisible: false,
         ),
         MailMessageAttachment(
           id: 'pdf_1',
@@ -236,6 +237,7 @@ void main() {
           sizeBytes: 5,
           disposition: 'attachment',
           isInline: false,
+          isVisible: true,
         ),
       ],
     );
@@ -256,7 +258,7 @@ void main() {
 
     expect(find.text('html-view:$htmlBody'), findsOneWidget);
     expect(find.text('image001.png'), findsNothing);
-    expect(find.text('image002.png'), findsOneWidget);
+    expect(find.text('image002.png'), findsNothing);
     expect(find.text('invoice.pdf'), findsOneWidget);
   });
 
@@ -298,6 +300,46 @@ void main() {
     expect(find.text('html-view:$htmlBody'), findsOneWidget);
   });
 
+  test(
+    'HTML wrapper injects mobile-first fit-to-width CSS after raw email',
+    () {
+      const rawHtml = '''
+<style>
+@media only screen and (max-width: 660px) {
+  .full-header {
+    width: 660px !important;
+    min-width: 660px !important;
+  }
+}
+</style>
+<table class="full-header" width="660" style="width: 660px;">
+  <tr>
+    <td width="600"><img src="hero.png" width="660"></td>
+  </tr>
+</table>
+<pre>unbreakable content</pre>
+''';
+
+      final wrappedHtml = wrapEmailHtmlForRendering(rawHtml);
+
+      expect(wrappedHtml, contains('width: 100% !important;'));
+      expect(wrappedHtml, contains('max-width: 100% !important;'));
+      expect(wrappedHtml, contains('overflow-x: auto;'));
+      expect(wrappedHtml, contains('.full-header'));
+      expect(wrappedHtml, contains('table[width]'));
+      expect(wrappedHtml, contains('table[style*="width"]'));
+      expect(wrappedHtml, contains('img[width]'));
+      expect(wrappedHtml, contains('height: auto !important;'));
+      expect(wrappedHtml, contains('pre,'));
+      expect(wrappedHtml, contains('overflow-x: auto !important;'));
+      expect(wrappedHtml, contains('-webkit-overflow-scrolling: touch;'));
+      expect(
+        wrappedHtml.lastIndexOf('data-finestar-email-fit'),
+        greaterThan(wrappedHtml.indexOf('width: 660px !important')),
+      );
+    },
+  );
+
   testWidgets('plain text remains fallback when HTML body is empty', (
     tester,
   ) async {
@@ -332,6 +374,134 @@ void main() {
 
     expect(find.text('PBZ plain text body'), findsOneWidget);
     expect(find.textContaining('html-view:'), findsNothing);
+  });
+
+  testWidgets('long plain body uses linked inner scroll before outer scroll', (
+    tester,
+  ) async {
+    final longBody = List.generate(
+      90,
+      (index) => 'Long body line ${index + 1}',
+    ).join('\n');
+    final longMessage = MailThreadMessage(
+      id: 'long-plain-message',
+      folderId: 'avrcan@finestar.hr:inbox',
+      folderName: 'INBOX',
+      subject: 'Long body scroll',
+      sender: 'shop@nuvola.example',
+      recipients: const ['avrcan@finestar.hr'],
+      bodyPlain: longBody,
+      bodyHtml: null,
+      receivedAt: DateTime(2026, 4, 16, 11),
+      messageIdHeader: '<long-plain-message@finestar.hr>',
+      inReplyToHeader: null,
+      referencesHeader: null,
+    );
+    final trailingMessage = MailThreadMessage(
+      id: 'trailing-plain-message',
+      folderId: 'avrcan@finestar.hr:sent',
+      folderName: 'Sent',
+      subject: 'Re: Long body scroll',
+      sender: 'avrcan@finestar.hr',
+      recipients: const ['shop@nuvola.example'],
+      bodyPlain: List.generate(
+        18,
+        (index) => 'Trailing reply line ${index + 1}',
+      ).join('\n'),
+      bodyHtml: null,
+      receivedAt: DateTime(2026, 4, 16, 11, 5),
+      messageIdHeader: '<trailing-plain-message@finestar.hr>',
+      inReplyToHeader: '<long-plain-message@finestar.hr>',
+      referencesHeader: '<long-plain-message@finestar.hr>',
+    );
+    final thread = MailThread(
+      subject: 'Long body scroll',
+      selectedMessageId: longMessage.id,
+      messages: [longMessage, trailingMessage],
+    );
+
+    await tester.pumpWidget(
+      _buildTestApp(
+        repository: _FakeMailboxRepository(thread: thread),
+        initialMessageId: longMessage.id,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final bodyTarget = find
+        .byKey(const ValueKey('message-body-linked-scroll-view'))
+        .first;
+    final outerScrollable = tester.state<ScrollableState>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('message-detail-outer-scroll-view')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    final innerScrollable = tester.state<ScrollableState>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('message-body-inner-scroll-view')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    final outerOffsetBefore = outerScrollable.position.pixels;
+    final innerOffsetBefore = innerScrollable.position.pixels;
+
+    await tester.drag(bodyTarget, const Offset(0, -140));
+    await tester.pumpAndSettle();
+
+    expect(innerScrollable.position.pixels, greaterThan(innerOffsetBefore));
+    expect(outerScrollable.position.pixels, outerOffsetBefore);
+
+    await tester.drag(bodyTarget, const Offset(0, -3200));
+    await tester.pumpAndSettle();
+
+    expect(
+      innerScrollable.position.pixels,
+      innerScrollable.position.maxScrollExtent,
+    );
+    expect(outerScrollable.position.pixels, greaterThan(outerOffsetBefore));
+  });
+
+  testWidgets('short plain body does not force an inner scrollbar', (
+    tester,
+  ) async {
+    final shortMessage = MailThreadMessage(
+      id: 'short-plain-message',
+      folderId: 'avrcan@finestar.hr:inbox',
+      folderName: 'INBOX',
+      subject: 'Short body scroll',
+      sender: 'shop@nuvola.example',
+      recipients: const ['avrcan@finestar.hr'],
+      bodyPlain: 'Short body.',
+      bodyHtml: null,
+      receivedAt: DateTime(2026, 4, 16, 11),
+      messageIdHeader: '<short-plain-message@finestar.hr>',
+      inReplyToHeader: null,
+      referencesHeader: null,
+    );
+    final thread = MailThread(
+      subject: 'Short body scroll',
+      selectedMessageId: shortMessage.id,
+      messages: [shortMessage],
+    );
+
+    await tester.pumpWidget(
+      _buildTestApp(
+        repository: _FakeMailboxRepository(thread: thread),
+        initialMessageId: shortMessage.id,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final innerScrollbar = tester.widget<Scrollbar>(
+      find.byKey(const ValueKey('message-body-inner-scrollbar')),
+    );
+
+    expect(innerScrollbar.thumbVisibility, isFalse);
   });
 
   testWidgets('collapsed HTML message shows plain preview until expanded', (

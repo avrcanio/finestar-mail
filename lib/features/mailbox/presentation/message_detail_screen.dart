@@ -41,6 +41,7 @@ class MessageDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
+  final _outerScrollController = ScrollController();
   final _expandedMessageIds = <String>{};
   final _visibleQuotedMessageIds = <String>{};
   final _markedReadMessageIds = <String>{};
@@ -77,6 +78,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                       Expanded(
                         child: _MessageThreadContent(
                           thread: thread,
+                          outerScrollController: _outerScrollController,
                           expandedMessageIds: _expandedMessageIds,
                           visibleQuotedMessageIds: _visibleQuotedMessageIds,
                           emailHtmlViewBuilder: widget.emailHtmlViewBuilder,
@@ -131,6 +133,12 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _outerScrollController.dispose();
+    super.dispose();
   }
 
   void _navigateBack() {
@@ -464,6 +472,7 @@ class _MessageTopBar extends StatelessWidget {
 class _MessageThreadContent extends StatelessWidget {
   const _MessageThreadContent({
     required this.thread,
+    required this.outerScrollController,
     required this.expandedMessageIds,
     required this.visibleQuotedMessageIds,
     required this.emailHtmlViewBuilder,
@@ -476,6 +485,7 @@ class _MessageThreadContent extends StatelessWidget {
   });
 
   final MailThread thread;
+  final ScrollController outerScrollController;
   final Set<String> expandedMessageIds;
   final Set<String> visibleQuotedMessageIds;
   final Widget Function(String html)? emailHtmlViewBuilder;
@@ -491,27 +501,38 @@ class _MessageThreadContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final selectedFolder = _selectedFolderName(thread);
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 32),
-      children: [
-        _SubjectHeader(subject: thread.subject, folderName: selectedFolder),
-        const SizedBox(height: 18),
-        for (final message in thread.messages) ...[
-          _ThreadMessageCard(
-            message: message,
-            isExpanded: expandedMessageIds.contains(message.id),
-            isQuotedVisible: visibleQuotedMessageIds.contains(message.id),
-            onToggleExpanded: () => onToggleExpanded(message.id),
-            onToggleQuoted: () => onToggleQuoted(message.id),
-            emailHtmlViewBuilder: emailHtmlViewBuilder,
-            onReply: () => onReply(message),
-            onForward: () => onForward(message),
-            downloadingAttachmentIds: downloadingAttachmentIds,
-            onDownloadAttachment: onDownloadAttachment,
-          ),
-          const SizedBox(height: 8),
+    return Scrollbar(
+      key: const ValueKey('message-detail-outer-scrollbar'),
+      controller: outerScrollController,
+      thumbVisibility: true,
+      trackVisibility: false,
+      thickness: 3,
+      radius: const Radius.circular(999),
+      child: ListView(
+        key: const ValueKey('message-detail-outer-scroll-view'),
+        controller: outerScrollController,
+        padding: const EdgeInsets.fromLTRB(18, 12, 18, 32),
+        children: [
+          _SubjectHeader(subject: thread.subject, folderName: selectedFolder),
+          const SizedBox(height: 18),
+          for (final message in thread.messages) ...[
+            _ThreadMessageCard(
+              message: message,
+              outerScrollController: outerScrollController,
+              isExpanded: expandedMessageIds.contains(message.id),
+              isQuotedVisible: visibleQuotedMessageIds.contains(message.id),
+              onToggleExpanded: () => onToggleExpanded(message.id),
+              onToggleQuoted: () => onToggleQuoted(message.id),
+              emailHtmlViewBuilder: emailHtmlViewBuilder,
+              onReply: () => onReply(message),
+              onForward: () => onForward(message),
+              downloadingAttachmentIds: downloadingAttachmentIds,
+              onDownloadAttachment: onDownloadAttachment,
+            ),
+            const SizedBox(height: 8),
+          ],
         ],
-      ],
+      ),
     );
   }
 
@@ -578,6 +599,7 @@ class _SubjectHeader extends StatelessWidget {
 class _ThreadMessageCard extends StatelessWidget {
   const _ThreadMessageCard({
     required this.message,
+    required this.outerScrollController,
     required this.isExpanded,
     required this.isQuotedVisible,
     required this.emailHtmlViewBuilder,
@@ -590,6 +612,7 @@ class _ThreadMessageCard extends StatelessWidget {
   });
 
   final MailThreadMessage message;
+  final ScrollController outerScrollController;
   final bool isExpanded;
   final bool isQuotedVisible;
   final Widget Function(String html)? emailHtmlViewBuilder;
@@ -688,6 +711,7 @@ class _ThreadMessageCard extends StatelessWidget {
               body: body,
               htmlBody: message.bodyHtml,
               isExpanded: isExpanded,
+              outerScrollController: outerScrollController,
               onToggleExpanded: onToggleExpanded,
               emailHtmlViewBuilder: emailHtmlViewBuilder,
             ),
@@ -754,6 +778,7 @@ class _MessageBodyView extends StatelessWidget {
     required this.body,
     required this.htmlBody,
     required this.isExpanded,
+    required this.outerScrollController,
     required this.onToggleExpanded,
     required this.emailHtmlViewBuilder,
   });
@@ -761,6 +786,7 @@ class _MessageBodyView extends StatelessWidget {
   final String body;
   final String? htmlBody;
   final bool isExpanded;
+  final ScrollController outerScrollController;
   final VoidCallback onToggleExpanded;
   final Widget Function(String html)? emailHtmlViewBuilder;
 
@@ -787,13 +813,147 @@ class _MessageBodyView extends StatelessWidget {
       ),
     );
     if (isExpanded) {
-      return text;
+      return _LinkedPlainBodyScrollView(
+        outerScrollController: outerScrollController,
+        child: text,
+      );
     }
     return InkWell(
       borderRadius: BorderRadius.circular(8),
       onTap: onToggleExpanded,
       child: SizedBox(width: double.infinity, child: text),
     );
+  }
+}
+
+class _LinkedPlainBodyScrollView extends StatefulWidget {
+  const _LinkedPlainBodyScrollView({
+    required this.outerScrollController,
+    required this.child,
+  });
+
+  final ScrollController outerScrollController;
+  final Widget child;
+
+  @override
+  State<_LinkedPlainBodyScrollView> createState() =>
+      _LinkedPlainBodyScrollViewState();
+}
+
+class _LinkedPlainBodyScrollViewState
+    extends State<_LinkedPlainBodyScrollView> {
+  final _bodyScrollController = ScrollController();
+  bool _isBodyScrollable = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _bodyScrollController.addListener(_refreshScrollability);
+  }
+
+  @override
+  void didUpdateWidget(covariant _LinkedPlainBodyScrollView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _queueScrollabilityCheck();
+  }
+
+  @override
+  void dispose() {
+    _bodyScrollController
+      ..removeListener(_refreshScrollability)
+      ..dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _queueScrollabilityCheck();
+    final viewportHeight = (MediaQuery.sizeOf(context).height * 0.52)
+        .clamp(220.0, 460.0)
+        .toDouble();
+
+    return Listener(
+      onPointerSignal: (event) {
+        if (event is PointerScrollEvent) {
+          _applyScrollDelta(event.scrollDelta.dy);
+        }
+      },
+      child: GestureDetector(
+        key: const ValueKey('message-body-linked-scroll-view'),
+        behavior: HitTestBehavior.translucent,
+        onVerticalDragUpdate: (details) => _applyScrollDelta(-details.delta.dy),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: viewportHeight),
+          child: Scrollbar(
+            key: const ValueKey('message-body-inner-scrollbar'),
+            controller: _bodyScrollController,
+            thumbVisibility: _isBodyScrollable,
+            trackVisibility: false,
+            thickness: 2,
+            radius: const Radius.circular(999),
+            child: SingleChildScrollView(
+              key: const ValueKey('message-body-inner-scroll-view'),
+              controller: _bodyScrollController,
+              physics: const NeverScrollableScrollPhysics(),
+              padding: EdgeInsets.only(right: _isBodyScrollable ? 10 : 0),
+              child: widget.child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _applyScrollDelta(double scrollDelta) {
+    var remainingDelta = scrollDelta;
+
+    if (_bodyScrollController.hasClients) {
+      final position = _bodyScrollController.position;
+      final currentOffset = position.pixels;
+      final nextOffset = (currentOffset + remainingDelta).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      );
+      final consumedDelta = nextOffset - currentOffset;
+      if (consumedDelta.abs() > 0.01) {
+        _bodyScrollController.jumpTo(nextOffset);
+      }
+      remainingDelta -= consumedDelta;
+    }
+
+    if (remainingDelta.abs() <= 0.01 ||
+        !widget.outerScrollController.hasClients) {
+      return;
+    }
+
+    final outerPosition = widget.outerScrollController.position;
+    final currentOuterOffset = outerPosition.pixels;
+    final nextOuterOffset = (currentOuterOffset + remainingDelta).clamp(
+      outerPosition.minScrollExtent,
+      outerPosition.maxScrollExtent,
+    );
+    if ((nextOuterOffset - currentOuterOffset).abs() > 0.01) {
+      widget.outerScrollController.jumpTo(nextOuterOffset);
+    }
+  }
+
+  void _queueScrollabilityCheck() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _refreshScrollability();
+      }
+    });
+  }
+
+  void _refreshScrollability() {
+    if (!_bodyScrollController.hasClients) {
+      return;
+    }
+    final nextIsScrollable =
+        _bodyScrollController.position.maxScrollExtent > 0.5;
+    if (nextIsScrollable != _isBodyScrollable && mounted) {
+      setState(() => _isBodyScrollable = nextIsScrollable);
+    }
   }
 }
 
@@ -829,7 +989,7 @@ class _EmailHtmlViewState extends State<_EmailHtmlView> {
           },
         ),
       )
-      ..loadHtmlString(_wrapEmailHtml(widget.html));
+      ..loadHtmlString(wrapEmailHtmlForRendering(widget.html));
   }
 
   @override
@@ -871,34 +1031,131 @@ Future<void> _openExternalUrl(Uri uri) async {
   }
 }
 
-String _wrapEmailHtml(String rawHtml) {
+String wrapEmailHtmlForRendering(String rawHtml) {
   return '''
 <!DOCTYPE html>
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      background: #ffffff;
-      color: #222222;
-    }
-    body {
-      overflow-wrap: break-word;
-      -webkit-text-size-adjust: 100%;
-    }
-    img, table {
-      max-width: 100%;
-    }
+  <style data-finestar-email-fit>
+$_emailFitToWidthCss
   </style>
 </head>
 <body>
 $rawHtml
+<style data-finestar-email-fit>
+$_emailFitToWidthCss
+</style>
 </body>
 </html>
 ''';
 }
+
+const _emailFitToWidthCss = r'''
+    html,
+    body {
+      margin: 0 !important;
+      padding: 0 !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      min-width: 0 !important;
+      background: #ffffff;
+      color: #222222;
+      overflow-x: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box !important;
+    }
+
+    body {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    body > *,
+    div,
+    section,
+    article,
+    header,
+    footer {
+      max-width: 100% !important;
+      min-width: 0 !important;
+    }
+
+    table,
+    table[width],
+    table[style*="width"],
+    .full-header,
+    .mj-outlook-group-fix {
+      width: 100% !important;
+      max-width: 100% !important;
+      min-width: 0 !important;
+    }
+
+    td,
+    th,
+    td[width],
+    th[width],
+    td[style*="width"],
+    th[style*="width"] {
+      max-width: 100% !important;
+      min-width: 0 !important;
+    }
+
+    img,
+    picture,
+    video,
+    canvas,
+    svg {
+      max-width: 100% !important;
+      height: auto !important;
+    }
+
+    img[width],
+    img[style*="width"] {
+      width: auto !important;
+      max-width: 100% !important;
+    }
+
+    pre,
+    code {
+      max-width: 100% !important;
+      overflow-x: auto !important;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    pre {
+      white-space: pre-wrap !important;
+      overflow-wrap: anywhere !important;
+    }
+
+    @media only screen and (max-width: 700px) {
+      table,
+      table[width],
+      table[style*="width"],
+      .full-header,
+      .mj-outlook-group-fix {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+      }
+
+      td,
+      th {
+        max-width: 100% !important;
+      }
+
+      pre,
+      code {
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch;
+      }
+    }
+''';
 
 class _AttachmentList extends StatelessWidget {
   const _AttachmentList({
@@ -935,11 +1192,16 @@ class _AttachmentList extends StatelessWidget {
 
 List<MailMessageAttachment> _visibleAttachmentChips(MailThreadMessage message) {
   return message.attachments
-      .where(
-        (attachment) =>
-            !_isReferencedInlineCidResource(message.bodyHtml, attachment),
-      )
+      .where((attachment) => _isVisibleAttachment(message.bodyHtml, attachment))
       .toList();
+}
+
+bool _isVisibleAttachment(String? html, MailMessageAttachment attachment) {
+  final isVisible = attachment.isVisible;
+  if (isVisible != null) {
+    return isVisible;
+  }
+  return !_isReferencedInlineCidResource(html, attachment);
 }
 
 bool _isReferencedInlineCidResource(
