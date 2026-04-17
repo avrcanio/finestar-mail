@@ -252,6 +252,13 @@ void main() {
       expect(config.registrationSecret, 'local-secret');
     },
   );
+
+  test('environment config has production backend base URL fallback', () {
+    final config = DeviceRegistrationConfig.fromEnvironment();
+
+    expect(config.apiBaseUrl, 'https://mailadmin.finestar.hr');
+    expect(config.isConfigured, isFalse);
+  });
 }
 
 class _RegistrationFailure {
