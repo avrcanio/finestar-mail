@@ -6,6 +6,7 @@ class MailMessageAttachment {
     required this.sizeBytes,
     required this.disposition,
     required this.isInline,
+    this.contentId = '',
   });
 
   final String id;
@@ -14,6 +15,7 @@ class MailMessageAttachment {
   final int? sizeBytes;
   final String? disposition;
   final bool isInline;
+  final String contentId;
 }
 
 class DownloadedMailAttachment {

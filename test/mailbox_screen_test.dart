@@ -34,12 +34,99 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Finestar Mail'), findsNothing);
-    expect(find.text('INBOX'), findsOneWidget);
+    expect(find.text('Inbox'), findsOneWidget);
     expect(find.text('Sent'), findsOneWidget);
     expect(find.text('Drafts'), findsOneWidget);
     expect(find.text('Trash'), findsOneWidget);
     expect(find.text('Junk'), findsOneWidget);
     expect(find.text('Projects'), findsOneWidget);
+  });
+
+  testWidgets('drawer renders nested folders as collapsible tree', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_buildTestApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Open folders'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Izvodi'), findsOneWidget);
+    expect(find.text('Izvodi.HPB'), findsNothing);
+    expect(find.text('HPB'), findsNothing);
+
+    await tester.tap(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('Izvodi'),
+          matching: find.byType(ListTile),
+        ),
+        matching: find.byTooltip('Expand folder'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('HPB'), findsOneWidget);
+    expect(find.text('Kent'), findsOneWidget);
+    expect(find.text('PBZ'), findsOneWidget);
+    expect(find.text('Izvodi.HPB'), findsNothing);
+
+    final parentTile = tester.widget<ListTile>(
+      find.ancestor(of: find.text('Izvodi'), matching: find.byType(ListTile)),
+    );
+    final childTile = tester.widget<ListTile>(
+      find.ancestor(of: find.text('HPB'), matching: find.byType(ListTile)),
+    );
+    final parentPadding = parentTile.contentPadding! as EdgeInsets;
+    final childPadding = childTile.contentPadding! as EdgeInsets;
+    expect(childPadding.left, greaterThan(parentPadding.left));
+
+    await tester.tap(find.byTooltip('Collapse folder'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('HPB'), findsNothing);
+  });
+
+  testWidgets('selecting parent folder opens messages with canonical path', (
+    tester,
+  ) async {
+    final repository = _FakeMailboxRepository();
+    await tester.pumpWidget(_buildTestApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Open folders'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Izvodi'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Izvodi sync smoke'), findsOneWidget);
+    expect(repository.requestedFolderPaths, contains('Izvodi'));
+  });
+
+  testWidgets('selecting nested folder opens messages with canonical path', (
+    tester,
+  ) async {
+    final repository = _FakeMailboxRepository();
+    await tester.pumpWidget(_buildTestApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Open folders'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('Izvodi'),
+          matching: find.byType(ListTile),
+        ),
+        matching: find.byTooltip('Expand folder'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('HPB'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('HPB sync smoke'), findsOneWidget);
+    expect(repository.requestedFolderPaths, contains('Izvodi.HPB'));
   });
 
   testWidgets('selecting a non-inbox server folder shows synced messages', (
@@ -324,6 +411,7 @@ class _FakeMailboxRepository implements MailboxRepository {
     ),
   ];
   final pageRequests = <String?>[];
+  final requestedFolderPaths = <String>[];
   final deletedMessageIds = <String>[];
   final restoredMessageIds = <String>[];
 
@@ -365,6 +453,30 @@ class _FakeMailboxRepository implements MailboxRepository {
       path: 'Projects',
       isInbox: false,
     ),
+    MailFolder(
+      id: 'app-test-2@finestar.hr:izvodi',
+      name: 'Izvodi',
+      path: 'Izvodi',
+      isInbox: false,
+    ),
+    MailFolder(
+      id: 'app-test-2@finestar.hr:izvodi.hpb',
+      name: 'Izvodi.HPB',
+      path: 'Izvodi.HPB',
+      isInbox: false,
+    ),
+    MailFolder(
+      id: 'app-test-2@finestar.hr:izvodi.kent',
+      name: 'Izvodi.Kent',
+      path: 'Izvodi.Kent',
+      isInbox: false,
+    ),
+    MailFolder(
+      id: 'app-test-2@finestar.hr:izvodi.pbz',
+      name: 'Izvodi.PBZ',
+      path: 'Izvodi.PBZ',
+      isInbox: false,
+    ),
   ];
 
   @override
@@ -383,6 +495,7 @@ class _FakeMailboxRepository implements MailboxRepository {
     int pageSize = 20,
     bool forceRefresh = false,
   }) async {
+    requestedFolderPaths.add(folder.path);
     if (folder.path == 'Sent') {
       return [
         MailMessageSummary(
@@ -400,6 +513,36 @@ class _FakeMailboxRepository implements MailboxRepository {
     }
     if (folder.path == 'Trash') {
       return trashMessages;
+    }
+    if (folder.path == 'Izvodi') {
+      return [
+        MailMessageSummary(
+          id: '$accountId:izvodi:api:1',
+          folderId: folder.id,
+          subject: 'Izvodi sync smoke',
+          sender: 'izvodi@example.test',
+          preview: 'This message came from the selected Izvodi folder.',
+          receivedAt: DateTime(2026, 4, 16),
+          isRead: true,
+          hasAttachments: false,
+          sequence: 1,
+        ),
+      ];
+    }
+    if (folder.path == 'Izvodi.HPB') {
+      return [
+        MailMessageSummary(
+          id: '$accountId:izvodi.hpb:api:1',
+          folderId: folder.id,
+          subject: 'HPB sync smoke',
+          sender: 'hpb@example.test',
+          preview: 'This message came from the selected HPB folder.',
+          receivedAt: DateTime(2026, 4, 16),
+          isRead: true,
+          hasAttachments: false,
+          sequence: 1,
+        ),
+      ];
     }
     return messages;
   }

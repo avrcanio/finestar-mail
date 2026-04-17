@@ -718,10 +718,11 @@ class _ThreadMessageCard extends StatelessWidget {
                 ),
               ],
             ],
-            if (isExpanded && message.attachments.isNotEmpty) ...[
+            if (isExpanded && _visibleAttachmentChips(message).isNotEmpty) ...[
               const SizedBox(height: 16),
               _AttachmentList(
                 message: message,
+                attachments: _visibleAttachmentChips(message),
                 downloadingAttachmentIds: downloadingAttachmentIds,
                 onDownloadAttachment: onDownloadAttachment,
               ),
@@ -902,11 +903,13 @@ $rawHtml
 class _AttachmentList extends StatelessWidget {
   const _AttachmentList({
     required this.message,
+    required this.attachments,
     required this.downloadingAttachmentIds,
     required this.onDownloadAttachment,
   });
 
   final MailThreadMessage message;
+  final List<MailMessageAttachment> attachments;
   final Set<String> downloadingAttachmentIds;
   final void Function(MailThreadMessage, MailMessageAttachment)
   onDownloadAttachment;
@@ -917,7 +920,7 @@ class _AttachmentList extends StatelessWidget {
       spacing: 8,
       runSpacing: 8,
       children: [
-        for (final attachment in message.attachments)
+        for (final attachment in attachments)
           _AttachmentChip(
             attachment: attachment,
             isDownloading: downloadingAttachmentIds.contains(
@@ -928,6 +931,40 @@ class _AttachmentList extends StatelessWidget {
       ],
     );
   }
+}
+
+List<MailMessageAttachment> _visibleAttachmentChips(MailThreadMessage message) {
+  return message.attachments
+      .where(
+        (attachment) =>
+            !_isReferencedInlineCidResource(message.bodyHtml, attachment),
+      )
+      .toList();
+}
+
+bool _isReferencedInlineCidResource(
+  String? html,
+  MailMessageAttachment attachment,
+) {
+  if (!attachment.isInline || html == null || html.isEmpty) {
+    return false;
+  }
+  final contentId = attachment.contentId.trim();
+  if (contentId.isEmpty) {
+    return false;
+  }
+  return _cidReferencePattern(contentId).hasMatch(html);
+}
+
+RegExp _cidReferencePattern(String contentId) {
+  final normalized = contentId.trim();
+  final candidates = {
+    normalized,
+    '<$normalized>',
+    Uri.encodeComponent(normalized),
+    Uri.encodeComponent('<$normalized>'),
+  }.where((candidate) => candidate.isNotEmpty).map(RegExp.escape).join('|');
+  return RegExp('cid:\\s*(?:$candidates)', caseSensitive: false);
 }
 
 class _AttachmentChip extends StatelessWidget {

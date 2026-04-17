@@ -30,6 +30,7 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
   String? _selectedFolderId;
   String _searchQuery = '';
   final _selectedMessageIds = <String>{};
+  final _expandedFolderPaths = <String>{};
   bool _isProcessingSelection = false;
 
   @override
@@ -195,7 +196,10 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
       key: _scaffoldKey,
       backgroundColor: const Color(0xFFF7F8FC),
       drawer: _MailboxDrawer(
+        expandedFolderPaths: _expandedFolderPaths,
+        selectedFolder: selectedFolder,
         selectedFolderId: selectedFolder?.id,
+        onFolderExpansionToggled: _toggleFolderExpansion,
         onFolderSelected: (folder) {
           _searchDebounce?.cancel();
           setState(() {
@@ -273,6 +277,14 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
       }
     }
     return folders.first;
+  }
+
+  void _toggleFolderExpansion(String path) {
+    setState(() {
+      if (!_expandedFolderPaths.add(path)) {
+        _expandedFolderPaths.remove(path);
+      }
+    });
   }
 }
 
@@ -452,11 +464,17 @@ class _GmailSearchBar extends StatelessWidget {
 
 class _MailboxDrawer extends ConsumerWidget {
   const _MailboxDrawer({
+    required this.expandedFolderPaths,
+    required this.selectedFolder,
     required this.selectedFolderId,
+    required this.onFolderExpansionToggled,
     required this.onFolderSelected,
   });
 
+  final Set<String> expandedFolderPaths;
+  final MailFolder? selectedFolder;
   final String? selectedFolderId;
+  final ValueChanged<String> onFolderExpansionToggled;
   final ValueChanged<MailFolder> onFolderSelected;
 
   @override
@@ -471,26 +489,26 @@ class _MailboxDrawer extends ConsumerWidget {
           children: [
             foldersAsync.when(
               data: (folders) {
-                final sortedFolders = _sortFolders(folders);
-                if (sortedFolders.isEmpty) {
+                final tree = _buildFolderTree(folders);
+                if (tree.isEmpty) {
                   return const ListTile(
                     leading: Icon(Icons.folder_off_outlined),
                     title: Text('No folders found'),
                   );
                 }
 
+                final effectiveExpandedPaths = {
+                  ...expandedFolderPaths,
+                  ..._selectedAncestorPaths(selectedFolder),
+                };
                 return Column(
                   children: [
-                    for (final folder in sortedFolders)
-                      NavigationDrawerDestination(
-                        icon: Icon(_folderIcon(folder)),
-                        selectedIcon: Icon(_folderIcon(folder)),
-                        label: Text(_folderLabel(folder)),
-                      )._asListTile(
-                        selected:
-                            selectedFolderId == folder.id ||
-                            (selectedFolderId == null && _isInbox(folder)),
-                        onTap: () => onFolderSelected(folder),
+                    for (final node in tree)
+                      ..._buildFolderRows(
+                        context: context,
+                        node: node,
+                        depth: 0,
+                        expandedPaths: effectiveExpandedPaths,
                       ),
                   ],
                 );
@@ -512,40 +530,268 @@ class _MailboxDrawer extends ConsumerWidget {
       ),
     );
   }
+
+  List<Widget> _buildFolderRows({
+    required BuildContext context,
+    required _FolderTreeNode node,
+    required int depth,
+    required Set<String> expandedPaths,
+  }) {
+    final expanded = expandedPaths.contains(node.path);
+    return [
+      _FolderDrawerTile(
+        node: node,
+        depth: depth,
+        selected: _isSelected(node.folder),
+        expanded: expanded,
+        onExpandTap: node.children.isNotEmpty
+            ? () => onFolderExpansionToggled(node.path)
+            : null,
+        onOpenTap: node.folder != null && node.folder!.selectable
+            ? () => onFolderSelected(node.folder!)
+            : node.children.isNotEmpty
+            ? () => onFolderExpansionToggled(node.path)
+            : null,
+      ),
+      if (expanded)
+        for (final child in node.children)
+          ..._buildFolderRows(
+            context: context,
+            node: child,
+            depth: depth + 1,
+            expandedPaths: expandedPaths,
+          ),
+    ];
+  }
+
+  bool _isSelected(MailFolder? folder) {
+    if (folder == null) {
+      return false;
+    }
+    return selectedFolderId == folder.id ||
+        (selectedFolderId == null && _isInbox(folder));
+  }
 }
 
-extension on NavigationDrawerDestination {
-  Widget _asListTile({required bool selected, required VoidCallback onTap}) {
-    final label = this.label;
+class _FolderDrawerTile extends StatelessWidget {
+  const _FolderDrawerTile({
+    required this.node,
+    required this.depth,
+    required this.selected,
+    required this.expanded,
+    required this.onExpandTap,
+    required this.onOpenTap,
+  });
 
+  final _FolderTreeNode node;
+  final int depth;
+  final bool selected;
+  final bool expanded;
+  final VoidCallback? onExpandTap;
+  final VoidCallback? onOpenTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasChildren = node.children.isNotEmpty;
+    final primaryColor = selected
+        ? const Color(0xFF153B52)
+        : const Color(0xFF202124);
     return ListTile(
       selected: selected,
-      leading: IconTheme(
-        data: IconThemeData(
-          color: selected ? const Color(0xFF153B52) : const Color(0xFF5D636B),
-          size: 24,
-        ),
-        child: selected && selectedIcon != null ? selectedIcon! : icon,
+      enabled: onOpenTap != null,
+      leading: Icon(
+        hasChildren
+            ? (expanded ? Icons.folder_open_outlined : Icons.folder_outlined)
+            : _folderIcon(node.folder!),
+        color: selected ? const Color(0xFF153B52) : const Color(0xFF5D636B),
+        size: 24,
       ),
-      title: Builder(
-        builder: (context) => DefaultTextStyle.merge(
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-            color: selected ? const Color(0xFF153B52) : const Color(0xFF202124),
-            fontSize: 16,
-            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-            letterSpacing: .35,
-          ),
-          child: label,
+      title: Text(
+        node.label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+          color: primaryColor,
+          fontSize: 16,
+          fontWeight: selected || hasChildren
+              ? FontWeight.w700
+              : FontWeight.w500,
+          letterSpacing: .35,
         ),
       ),
-      onTap: onTap,
+      trailing: hasChildren
+          ? IconButton(
+              tooltip: expanded ? 'Collapse folder' : 'Expand folder',
+              onPressed: onExpandTap,
+              icon: Icon(
+                expanded ? Icons.expand_less : Icons.expand_more,
+                color: const Color(0xFF5D636B),
+              ),
+            )
+          : null,
+      onTap: onOpenTap,
       selectedTileColor: const Color(0xFFE8EFF8),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
       minTileHeight: 56,
       horizontalTitleGap: 18,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+      contentPadding: EdgeInsets.only(left: 24 + depth * 22, right: 24),
     );
   }
+}
+
+class _FolderTreeNode {
+  _FolderTreeNode({required this.path, required this.label, this.folder});
+
+  final String path;
+  final String label;
+  MailFolder? folder;
+  final children = <_FolderTreeNode>[];
+}
+
+List<_FolderTreeNode> _buildFolderTree(List<MailFolder> folders) {
+  final byPath = <String, _FolderTreeNode>{};
+  final roots = <_FolderTreeNode>[];
+
+  _FolderTreeNode ensureNode(String path, {MailFolder? folder}) {
+    final existing = byPath[path];
+    if (existing != null) {
+      if (folder != null) {
+        existing.folder = folder;
+      }
+      return existing;
+    }
+    final node = _FolderTreeNode(
+      path: path,
+      label: folder == null ? _pathLabel(path) : _folderLabel(folder),
+      folder: folder,
+    );
+    byPath[path] = node;
+    return node;
+  }
+
+  for (final folder in folders) {
+    ensureNode(folder.path, folder: folder);
+  }
+
+  for (final folder in folders) {
+    final parentPath = _folderParentPath(folder);
+    if (parentPath == null) {
+      continue;
+    }
+    ensureNode(parentPath);
+  }
+
+  final nodes = byPath.values.toList();
+  for (final node in nodes) {
+    final parentPath = node.folder == null
+        ? _pathParentPath(node.path)
+        : _folderParentPath(node.folder!);
+    final parent = parentPath == null ? null : byPath[parentPath];
+    if (parent == null || parent == node) {
+      roots.add(node);
+    } else if (!parent.children.contains(node)) {
+      parent.children.add(node);
+    }
+  }
+
+  void sortNodes(List<_FolderTreeNode> nodes) {
+    nodes.sort(_compareFolderNodes);
+    for (final node in nodes) {
+      sortNodes(node.children);
+    }
+  }
+
+  sortNodes(roots);
+  return roots;
+}
+
+int _compareFolderNodes(_FolderTreeNode left, _FolderTreeNode right) {
+  final leftRole = left.folder == null
+      ? _FolderRole.custom
+      : _folderRole(left.folder!);
+  final rightRole = right.folder == null
+      ? _FolderRole.custom
+      : _folderRole(right.folder!);
+  final roleComparison = _roleRank(leftRole).compareTo(_roleRank(rightRole));
+  if (roleComparison != 0) {
+    return roleComparison;
+  }
+  return left.label.toLowerCase().compareTo(right.label.toLowerCase());
+}
+
+Set<String> _selectedAncestorPaths(MailFolder? selectedFolder) {
+  if (selectedFolder == null) {
+    return const {};
+  }
+  final ancestors = <String>{};
+  var parentPath = _folderParentPath(selectedFolder);
+  while (parentPath != null && ancestors.add(parentPath)) {
+    parentPath = _pathParentPath(parentPath);
+  }
+  return ancestors;
+}
+
+String? _folderParentPath(MailFolder folder) {
+  final parentPath = folder.parentPath?.trim();
+  if (parentPath != null && parentPath.isNotEmpty) {
+    return parentPath;
+  }
+  return _pathParentPath(folder.path);
+}
+
+String? _pathParentPath(String path) {
+  final separator = _folderSeparator(path);
+  if (separator == null) {
+    return null;
+  }
+  final index = path.lastIndexOf(separator);
+  if (index <= 0) {
+    return null;
+  }
+  return path.substring(0, index);
+}
+
+String? _folderSeparator(String path) {
+  if (path.contains('/')) {
+    return '/';
+  }
+  if (path.contains('.')) {
+    return '.';
+  }
+  return null;
+}
+
+String _pathLabel(String path) {
+  final separator = _folderSeparator(path);
+  if (separator == null) {
+    return path;
+  }
+  final segments = path
+      .split(separator)
+      .where((segment) => segment.trim().isNotEmpty)
+      .toList();
+  return segments.isEmpty ? path : segments.last;
+}
+
+String _folderLabel(MailFolder folder) {
+  if (_isInbox(folder)) {
+    return 'Inbox';
+  }
+  final displayName = folder.displayName?.trim();
+  if (displayName != null && displayName.isNotEmpty) {
+    return displayName;
+  }
+  if (folder.depth != null && folder.depth! > 0) {
+    return _pathLabel(folder.path);
+  }
+  final parentPath = folder.parentPath?.trim();
+  if (parentPath != null && parentPath.isNotEmpty) {
+    return _pathLabel(folder.path);
+  }
+  if (_folderParentPath(folder) != null) {
+    return _pathLabel(folder.path);
+  }
+  return folder.name.trim().isEmpty ? folder.path : folder.name;
 }
 
 class _MailboxContent extends ConsumerStatefulWidget {
@@ -933,25 +1179,6 @@ class _MessageList extends ConsumerWidget {
 }
 
 enum _FolderRole { inbox, sent, drafts, trash, junk, archive, custom }
-
-List<MailFolder> _sortFolders(List<MailFolder> folders) {
-  final sortedFolders = [...folders];
-  sortedFolders.sort((left, right) {
-    final roleComparison = _roleRank(
-      _folderRole(left),
-    ).compareTo(_roleRank(_folderRole(right)));
-    if (roleComparison != 0) {
-      return roleComparison;
-    }
-    return _folderLabel(
-      left,
-    ).toLowerCase().compareTo(_folderLabel(right).toLowerCase());
-  });
-  return sortedFolders;
-}
-
-String _folderLabel(MailFolder folder) =>
-    folder.name.trim().isEmpty ? folder.path : folder.name;
 
 IconData _folderIcon(MailFolder folder) {
   switch (_folderRole(folder)) {

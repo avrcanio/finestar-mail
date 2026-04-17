@@ -193,6 +193,73 @@ void main() {
     expect(find.text('text/plain - 2 B'), findsOneWidget);
   });
 
+  testWidgets('message detail hides only referenced inline cid attachments', (
+    tester,
+  ) async {
+    const htmlBody = '<p>Logo <img src="cid:image001.png@example"></p>';
+    final inlineMessage = MailThreadMessage(
+      id: 'avrcan@finestar.hr:inbox:api:42',
+      folderId: 'avrcan@finestar.hr:inbox',
+      folderName: 'INBOX',
+      subject: 'Inline images',
+      sender: 'ante@vitalgroupsa.com',
+      recipients: const ['avrcan@finestar.hr'],
+      bodyPlain: 'See logo.',
+      bodyHtml: htmlBody,
+      receivedAt: DateTime(2026, 4, 16, 10),
+      messageIdHeader: '<inline@finestar.hr>',
+      inReplyToHeader: null,
+      referencesHeader: null,
+      attachments: const [
+        MailMessageAttachment(
+          id: 'img_1',
+          filename: 'image001.png',
+          contentType: 'image/png',
+          sizeBytes: 3,
+          disposition: 'inline',
+          isInline: true,
+          contentId: 'image001.png@example',
+        ),
+        MailMessageAttachment(
+          id: 'img_2',
+          filename: 'image002.png',
+          contentType: 'image/png',
+          sizeBytes: 4,
+          disposition: 'inline',
+          isInline: true,
+          contentId: 'image002.png@example',
+        ),
+        MailMessageAttachment(
+          id: 'pdf_1',
+          filename: 'invoice.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 5,
+          disposition: 'attachment',
+          isInline: false,
+        ),
+      ],
+    );
+    final thread = MailThread(
+      subject: 'Inline images',
+      selectedMessageId: inlineMessage.id,
+      messages: [inlineMessage],
+    );
+
+    await tester.pumpWidget(
+      _buildTestApp(
+        repository: _FakeMailboxRepository(thread: thread),
+        initialMessageId: inlineMessage.id,
+        emailHtmlViewBuilder: (html) => Text('html-view:$html'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('html-view:$htmlBody'), findsOneWidget);
+    expect(find.text('image001.png'), findsNothing);
+    expect(find.text('image002.png'), findsOneWidget);
+    expect(find.text('invoice.pdf'), findsOneWidget);
+  });
+
   testWidgets('expanded HTML message renders HTML view instead of plain text', (
     tester,
   ) async {

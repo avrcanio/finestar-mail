@@ -175,6 +175,7 @@ void main() {
                   'flags': [],
                   'size': 123,
                   'has_attachments': true,
+                  'has_visible_attachments': false,
                 },
               ],
               'has_more': true,
@@ -211,8 +212,45 @@ void main() {
       expect(firstPage.nextBeforeUid, '40');
       expect(olderPage.messages.single.uid, '41');
       expect(olderPage.messages.single.hasAttachments, isTrue);
+      expect(olderPage.messages.single.hasVisibleAttachments, isFalse);
     },
   );
+
+  test('folders parses hierarchy metadata when present', () async {
+    final client = BackendMailApiClient(
+      httpClient: MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'account_email': 'app-test-1@finestar.hr',
+            'folders': [
+              {
+                'name': 'INBOX/Izvodi/HPB',
+                'path': 'INBOX/Izvodi/HPB',
+                'display_name': 'HPB',
+                'parent_path': 'INBOX/Izvodi',
+                'depth': 2,
+                'delimiter': '/',
+                'flags': ['HasNoChildren'],
+                'selectable': true,
+              },
+            ],
+          }),
+          200,
+        );
+      }),
+      baseUrlLoader: () async => 'https://mail.example.test',
+    );
+
+    final response = await client.folders(token: 'session-token');
+    final folder = response.folders.single;
+
+    expect(folder.name, 'INBOX/Izvodi/HPB');
+    expect(folder.path, 'INBOX/Izvodi/HPB');
+    expect(folder.displayName, 'HPB');
+    expect(folder.parentPath, 'INBOX/Izvodi');
+    expect(folder.depth, 2);
+    expect(folder.selectable, isTrue);
+  });
 
   test('message detail parses attachment metadata', () async {
     final client = BackendMailApiClient(
@@ -233,6 +271,7 @@ void main() {
               'flags': [],
               'size': 123,
               'has_attachments': true,
+              'has_visible_attachments': true,
               'text_body': 'See attachment.',
               'html_body': '',
               'attachments': [
@@ -243,6 +282,7 @@ void main() {
                   'size': 182340,
                   'disposition': 'attachment',
                   'is_inline': false,
+                  'content_id': '',
                 },
               ],
             },
@@ -260,12 +300,66 @@ void main() {
     );
 
     expect(detail.message.hasAttachments, isTrue);
+    expect(detail.message.hasVisibleAttachments, isTrue);
     expect(detail.message.attachments.single.id, 'att_1');
     expect(detail.message.attachments.single.filename, 'invoice.pdf');
     expect(detail.message.attachments.single.contentType, 'application/pdf');
     expect(detail.message.attachments.single.size, 182340);
     expect(detail.message.attachments.single.disposition, 'attachment');
     expect(detail.message.attachments.single.isInline, isFalse);
+    expect(detail.message.attachments.single.contentId, '');
+  });
+
+  test('message detail parses inline content id metadata', () async {
+    final client = BackendMailApiClient(
+      httpClient: MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'account_email': 'app-test-1@finestar.hr',
+            'folder': 'INBOX',
+            'message': {
+              'uid': '42',
+              'folder': 'INBOX',
+              'subject': 'Inline image',
+              'sender': 'sender@example.test',
+              'to': ['app-test-1@finestar.hr'],
+              'cc': [],
+              'date': '2026-04-16T07:00:00Z',
+              'message_id': '<m1@example.test>',
+              'flags': [],
+              'size': 123,
+              'has_attachments': true,
+              'has_visible_attachments': false,
+              'text_body': 'Logo',
+              'html_body': '<img src="cid:image001.png@example">',
+              'attachments': [
+                {
+                  'id': 'img_1',
+                  'filename': 'image001.png',
+                  'content_type': 'image/png',
+                  'size': 16,
+                  'disposition': 'inline',
+                  'is_inline': true,
+                  'content_id': 'image001.png@example',
+                },
+              ],
+            },
+          }),
+          200,
+        );
+      }),
+      baseUrlLoader: () async => 'https://mail.example.test',
+    );
+
+    final detail = await client.messageDetail(
+      token: 'session-token',
+      folder: 'INBOX',
+      uid: '42',
+    );
+
+    expect(detail.message.hasVisibleAttachments, isFalse);
+    expect(detail.message.attachments.single.isInline, isTrue);
+    expect(detail.message.attachments.single.contentId, 'image001.png@example');
   });
 
   test('attachment download sends auth and returns binary metadata', () async {

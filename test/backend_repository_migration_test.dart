@@ -114,6 +114,7 @@ void main() {
                       'flags': ['Seen'],
                       'size': 123,
                       'has_attachments': true,
+                      'has_visible_attachments': true,
                     },
                   ],
                 }),
@@ -136,6 +137,7 @@ void main() {
                   'flags': ['Seen'],
                   'size': 123,
                   'has_attachments': true,
+                  'has_visible_attachments': true,
                   'text_body': 'Plain backend body',
                   'html_body': '<p>Plain backend body</p>',
                   'attachments': [
@@ -146,6 +148,7 @@ void main() {
                       'size': 2,
                       'disposition': 'attachment',
                       'is_inline': false,
+                      'content_id': '',
                     },
                   ],
                 },
@@ -185,6 +188,142 @@ void main() {
       expect(detail.bodyHtml, '<p>Plain backend body</p>');
       expect(detail.attachments.single.id, 'att_1');
       expect(detail.attachments.single.filename, 'smoke.txt');
+      expect(detail.attachments.single.contentId, '');
+    },
+  );
+
+  test(
+    'mailbox repository rewrites referenced inline cid images and hides chips',
+    () async {
+      final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+      final storage = _MemorySecureStorageService();
+      addTearDown(database.close);
+      await storage.saveAuthToken(
+        accountId: 'app-test-1@finestar.hr',
+        token: 'backend-token',
+      );
+      final requests = <Uri>[];
+
+      final repository = MailboxRepositoryImpl(
+        appDatabase: database,
+        secureStorageService: storage,
+        backendMailApiClient: BackendMailApiClient(
+          httpClient: MockClient((request) async {
+            requests.add(request.url);
+            expect(request.headers['Authorization'], 'Token backend-token');
+            if (request.url.path == '/api/mail/messages') {
+              return http.Response(
+                jsonEncode({
+                  'account_email': 'app-test-1@finestar.hr',
+                  'folder': 'INBOX',
+                  'messages': [
+                    {
+                      'uid': '42',
+                      'folder': 'INBOX',
+                      'subject': 'Inline image',
+                      'sender': 'Sender <sender@example.test>',
+                      'to': ['app-test-1@finestar.hr'],
+                      'cc': [],
+                      'date': '2026-04-16T07:00:00Z',
+                      'message_id': '<m1@example.test>',
+                      'flags': ['Seen'],
+                      'size': 123,
+                      'has_attachments': true,
+                      'has_visible_attachments': false,
+                    },
+                  ],
+                  'has_more': false,
+                  'next_before_uid': null,
+                }),
+                200,
+              );
+            }
+            if (request.url.path == '/api/mail/messages/42/attachments/img_1') {
+              expect(request.url.queryParameters['folder'], 'INBOX');
+              return http.Response.bytes(
+                [1, 2, 3],
+                200,
+                headers: {'content-type': 'image/png'},
+              );
+            }
+            return http.Response(
+              jsonEncode({
+                'account_email': 'app-test-1@finestar.hr',
+                'folder': 'INBOX',
+                'message': {
+                  'uid': '42',
+                  'folder': 'INBOX',
+                  'subject': 'Inline image',
+                  'sender': 'Sender <sender@example.test>',
+                  'to': ['app-test-1@finestar.hr'],
+                  'cc': [],
+                  'date': '2026-04-16T07:00:00Z',
+                  'message_id': '<m1@example.test>',
+                  'flags': ['Seen'],
+                  'size': 123,
+                  'has_attachments': true,
+                  'has_visible_attachments': false,
+                  'text_body': 'Inline image body',
+                  'html_body':
+                      '<p>Logo <img src="cid:image001.png@example"></p>',
+                  'attachments': [
+                    {
+                      'id': 'img_1',
+                      'filename': 'image001.png',
+                      'content_type': 'image/png',
+                      'size': 3,
+                      'disposition': 'inline',
+                      'is_inline': true,
+                      'content_id': 'image001.png@example',
+                    },
+                    {
+                      'id': 'img_2',
+                      'filename': 'image002.png',
+                      'content_type': 'image/png',
+                      'size': 4,
+                      'disposition': 'inline',
+                      'is_inline': true,
+                      'content_id': 'image002.png@example',
+                    },
+                  ],
+                },
+              }),
+              200,
+            );
+          }),
+          baseUrlLoader: () async => 'https://mail.example.test',
+        ),
+      );
+
+      const folder = MailFolder(
+        id: 'app-test-1@finestar.hr:inbox',
+        name: 'INBOX',
+        path: 'INBOX',
+        isInbox: true,
+      );
+      final summaries = await repository.getMessages(
+        accountId: 'app-test-1@finestar.hr',
+        folder: folder,
+        forceRefresh: true,
+      );
+      expect(summaries.single.hasAttachments, isFalse);
+
+      final detail = await repository.getMessageDetail(
+        accountId: 'app-test-1@finestar.hr',
+        id: summaries.single.id,
+      );
+
+      expect(detail.bodyHtml, contains('data:image/png;base64,AQID'));
+      expect(detail.bodyHtml, isNot(contains('cid:image001.png@example')));
+      expect(detail.attachments.single.filename, 'image002.png');
+      expect(
+        requests.where((uri) => uri.path.endsWith('/attachments/img_1')).length,
+        1,
+      );
+      expect(
+        requests.any((uri) => uri.path.endsWith('/attachments/img_2')),
+        isFalse,
+      );
     },
   );
 
@@ -246,6 +385,80 @@ void main() {
       expect(downloaded.bytes, [104, 105]);
     },
   );
+
+  test('mailbox repository maps backend folder hierarchy metadata', () async {
+    final database = db.AppDatabase.forTesting(NativeDatabase.memory());
+    final storage = _MemorySecureStorageService();
+    addTearDown(database.close);
+    await storage.saveAuthToken(
+      accountId: 'app-test-1@finestar.hr',
+      token: 'backend-token',
+    );
+
+    final repository = MailboxRepositoryImpl(
+      appDatabase: database,
+      secureStorageService: storage,
+      backendMailApiClient: BackendMailApiClient(
+        httpClient: MockClient((request) async {
+          expect(request.url.path, '/api/mail/folders');
+          return http.Response(
+            jsonEncode({
+              'account_email': 'app-test-1@finestar.hr',
+              'folders': [
+                {
+                  'name': 'INBOX',
+                  'path': 'INBOX',
+                  'display_name': 'Inbox',
+                  'parent_path': null,
+                  'depth': 0,
+                  'delimiter': '/',
+                  'flags': [],
+                  'selectable': true,
+                },
+                {
+                  'name': 'INBOX/Izvodi/HPB',
+                  'path': 'INBOX/Izvodi/HPB',
+                  'display_name': 'HPB',
+                  'parent_path': 'INBOX/Izvodi',
+                  'depth': 2,
+                  'delimiter': '/',
+                  'flags': ['HasNoChildren'],
+                  'selectable': true,
+                },
+                {
+                  'name': 'INBOX/Archive',
+                  'path': 'INBOX/Archive',
+                  'display_name': 'Archive',
+                  'parent_path': 'INBOX',
+                  'depth': 1,
+                  'delimiter': '/',
+                  'flags': ['Noselect'],
+                  'selectable': true,
+                },
+              ],
+            }),
+            200,
+          );
+        }),
+        baseUrlLoader: () async => 'https://mail.example.test',
+      ),
+    );
+
+    final folders = await repository.getFolders('app-test-1@finestar.hr');
+    final hpb = folders.firstWhere(
+      (folder) => folder.path == 'INBOX/Izvodi/HPB',
+    );
+    final archive = folders.firstWhere(
+      (folder) => folder.path == 'INBOX/Archive',
+    );
+
+    expect(hpb.id, 'app-test-1@finestar.hr:inbox/izvodi/hpb');
+    expect(hpb.displayName, 'HPB');
+    expect(hpb.parentPath, 'INBOX/Izvodi');
+    expect(hpb.depth, 2);
+    expect(hpb.selectable, isTrue);
+    expect(archive.selectable, isFalse);
+  });
 
   test(
     'mailbox repository rejects local-only attachment download without http',

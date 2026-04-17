@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 
 import '../../../data/local/app_database.dart' as db;
@@ -105,15 +107,21 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
     final response = await _backendMailApiClient!.folders(token: token);
     return response.folders
-        .where((folder) => folder.name.trim().isNotEmpty)
-        .map(
-          (folder) => domain.MailFolder(
-            id: _folderId(accountId, folder.name),
-            name: folder.name,
-            path: folder.name,
-            isInbox: _isInboxPath(folder.name),
-          ),
-        )
+        .where((folder) => _backendFolderPath(folder).isNotEmpty)
+        .map((folder) {
+          final path = _backendFolderPath(folder);
+          return domain.MailFolder(
+            id: _folderId(accountId, path),
+            name: folder.name.trim().isEmpty ? path : folder.name,
+            path: path,
+            isInbox: _isInboxPath(path),
+            displayName: _backendFolderDisplayName(folder, path),
+            parentPath: _backendFolderParentPath(folder, path),
+            depth: _backendFolderDepth(folder, path),
+            selectable:
+                folder.selectable && !_hasFlag(folder.flags, 'Noselect'),
+          );
+        })
         .toList();
   }
 
@@ -157,6 +165,73 @@ class MailboxRepositoryImpl implements MailboxRepository {
           ),
         )
         .toList();
+  }
+
+  String _backendFolderPath(BackendFolderDto folder) {
+    final path = folder.path?.trim();
+    if (path != null && path.isNotEmpty) {
+      return path;
+    }
+    return folder.name.trim();
+  }
+
+  String? _backendFolderDisplayName(BackendFolderDto folder, String path) {
+    final displayName = folder.displayName?.trim();
+    if (displayName != null && displayName.isNotEmpty) {
+      return displayName;
+    }
+    return _lastFolderSegment(path, folder.delimiter);
+  }
+
+  String? _backendFolderParentPath(BackendFolderDto folder, String path) {
+    final parentPath = folder.parentPath?.trim();
+    if (parentPath != null && parentPath.isNotEmpty) {
+      return parentPath;
+    }
+    final separator = _folderSeparator(path, folder.delimiter);
+    if (separator == null) {
+      return null;
+    }
+    final index = path.lastIndexOf(separator);
+    if (index <= 0) {
+      return null;
+    }
+    return path.substring(0, index);
+  }
+
+  int? _backendFolderDepth(BackendFolderDto folder, String path) {
+    final depth = folder.depth;
+    if (depth != null) {
+      return depth;
+    }
+    final separator = _folderSeparator(path, folder.delimiter);
+    return separator == null ? 0 : separator.allMatches(path).length;
+  }
+
+  String _lastFolderSegment(String path, String? delimiter) {
+    final separator = _folderSeparator(path, delimiter);
+    if (separator == null) {
+      return path;
+    }
+    final segments = path
+        .split(separator)
+        .where((segment) => segment.trim().isNotEmpty)
+        .toList();
+    return segments.isEmpty ? path : segments.last;
+  }
+
+  String? _folderSeparator(String path, String? delimiter) {
+    final trimmedDelimiter = delimiter?.trim();
+    if (trimmedDelimiter != null && trimmedDelimiter.isNotEmpty) {
+      return trimmedDelimiter;
+    }
+    if (path.contains('/')) {
+      return '/';
+    }
+    if (path.contains('.')) {
+      return '.';
+    }
+    return null;
   }
 
   @override
@@ -343,7 +418,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         receivedAt: message.date ?? DateTime.now(),
         isRead: _hasFlag(message.flags, 'seen'),
         isImportant: _hasFlag(message.flags, 'flagged'),
-        hasAttachments: message.hasAttachments,
+        hasAttachments: message.hasVisibleAttachments ?? message.hasAttachments,
         sequence: int.tryParse(message.uid) ?? 0,
       );
     }).toList();
@@ -454,15 +529,30 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final folderId = _folderId(accountId, folder);
     final messageId = _messageId(accountId, folder, message.uid);
     final receivedAt = message.date ?? DateTime.now();
+    final allAttachments = _attachmentsFromBackend(message.attachments);
+    final rawBodyHtml = message.htmlBody.isEmpty ? null : message.htmlBody;
+    final bodyHtml = rawBodyHtml == null
+        ? null
+        : await _resolveInlineCidImages(
+            token: token,
+            folder: folder,
+            uid: message.uid,
+            bodyHtml: rawBodyHtml,
+            attachments: allAttachments,
+          );
+    final visibleAttachments = _visibleAttachmentsForHtml(
+      rawBodyHtml,
+      allAttachments,
+    );
     final detail = MailMessageDetail(
       id: messageId,
       subject: _subject(message.subject),
       sender: _sender(message.sender),
       recipients: [...message.to, ...message.cc],
       bodyPlain: message.textBody,
-      bodyHtml: message.htmlBody.isEmpty ? null : message.htmlBody,
+      bodyHtml: bodyHtml,
       receivedAt: receivedAt,
-      attachments: _attachmentsFromBackend(message.attachments),
+      attachments: visibleAttachments,
     );
 
     await _appDatabase.batch((batch) {
@@ -504,7 +594,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
           preview: _preview(detail.bodyPlain),
           receivedAt: receivedAt,
           isRead: _hasFlag(message.flags, 'seen'),
-          hasAttachments: message.attachments.isNotEmpty,
+          hasAttachments:
+              message.hasVisibleAttachments ?? visibleAttachments.isNotEmpty,
           sequence: int.tryParse(message.uid) ?? 0,
           isImportant: Value(_hasFlag(message.flags, 'flagged')),
         ),
@@ -1440,9 +1531,88 @@ class MailboxRepositoryImpl implements MailboxRepository {
             sizeBytes: attachment.size,
             disposition: attachment.disposition,
             isInline: attachment.isInline,
+            contentId: attachment.contentId,
           ),
         )
         .toList();
+  }
+
+  Future<String> _resolveInlineCidImages({
+    required String token,
+    required String folder,
+    required String uid,
+    required String bodyHtml,
+    required List<MailMessageAttachment> attachments,
+  }) async {
+    var resolvedHtml = bodyHtml;
+    for (final attachment in attachments) {
+      if (!_isReferencedInlineCidResource(bodyHtml, attachment)) {
+        continue;
+      }
+      try {
+        final download = await _backendMailApiClient!.downloadAttachment(
+          token: token,
+          folder: folder,
+          uid: uid,
+          attachmentId: attachment.id,
+        );
+        final contentType = _downloadContentType(
+          download.contentType,
+          attachment.contentType,
+        );
+        final dataUri =
+            'data:$contentType;base64,${base64Encode(download.bytes)}';
+        resolvedHtml = _replaceCidReferences(
+          resolvedHtml,
+          attachment.contentId,
+          dataUri,
+        );
+      } catch (_) {
+        // Leave the original cid: reference in place if an inline resource
+        // cannot be fetched; the message should remain readable.
+      }
+    }
+    return resolvedHtml;
+  }
+
+  List<MailMessageAttachment> _visibleAttachmentsForHtml(
+    String? bodyHtml,
+    List<MailMessageAttachment> attachments,
+  ) {
+    return attachments
+        .where(
+          (attachment) => !_isReferencedInlineCidResource(bodyHtml, attachment),
+        )
+        .toList();
+  }
+
+  bool _isReferencedInlineCidResource(
+    String? bodyHtml,
+    MailMessageAttachment attachment,
+  ) {
+    if (!attachment.isInline || bodyHtml == null || bodyHtml.isEmpty) {
+      return false;
+    }
+    final contentId = attachment.contentId.trim();
+    if (contentId.isEmpty) {
+      return false;
+    }
+    return _cidReferencePattern(contentId).hasMatch(bodyHtml);
+  }
+
+  String _replaceCidReferences(String html, String contentId, String value) {
+    return html.replaceAll(_cidReferencePattern(contentId), value);
+  }
+
+  RegExp _cidReferencePattern(String contentId) {
+    final normalized = contentId.trim();
+    final candidates = {
+      normalized,
+      '<$normalized>',
+      Uri.encodeComponent(normalized),
+      Uri.encodeComponent('<$normalized>'),
+    }.where((candidate) => candidate.isNotEmpty).map(RegExp.escape).join('|');
+    return RegExp('cid:\\s*(?:$candidates)', caseSensitive: false);
   }
 
   String _attachmentFilename(BackendAttachmentDto attachment) {

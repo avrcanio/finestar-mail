@@ -490,17 +490,32 @@ class BackendFolderDto {
     required this.name,
     required this.delimiter,
     required this.flags,
+    this.path,
+    this.displayName,
+    this.parentPath,
+    this.depth,
+    this.selectable = true,
   });
 
   final String name;
   final String? delimiter;
   final List<String> flags;
+  final String? path;
+  final String? displayName;
+  final String? parentPath;
+  final int? depth;
+  final bool selectable;
 
   factory BackendFolderDto.fromJson(Map<String, dynamic> json) {
     return BackendFolderDto(
       name: json['name'] as String? ?? '',
       delimiter: json['delimiter'] as String?,
       flags: _listOfStrings(json['flags']),
+      path: json['path'] as String?,
+      displayName: json['display_name'] as String?,
+      parentPath: json['parent_path'] as String?,
+      depth: json['depth'] is num ? (json['depth'] as num).toInt() : null,
+      selectable: json['selectable'] as bool? ?? true,
     );
   }
 }
@@ -571,6 +586,7 @@ class BackendMessageSummaryDto {
     required this.flags,
     required this.size,
     required this.hasAttachments,
+    this.hasVisibleAttachments,
   });
 
   final String uid;
@@ -584,6 +600,7 @@ class BackendMessageSummaryDto {
   final List<String> flags;
   final int? size;
   final bool hasAttachments;
+  final bool? hasVisibleAttachments;
 
   factory BackendMessageSummaryDto.fromJson(Map<String, dynamic> json) {
     return BackendMessageSummaryDto(
@@ -598,6 +615,9 @@ class BackendMessageSummaryDto {
       flags: _listOfStrings(json['flags']),
       size: json['size'] as int?,
       hasAttachments: json['has_attachments'] as bool? ?? false,
+      hasVisibleAttachments: json.containsKey('has_visible_attachments')
+          ? json['has_visible_attachments'] as bool? ?? false
+          : null,
     );
   }
 }
@@ -615,6 +635,7 @@ class BackendMessageDetailDto extends BackendMessageSummaryDto {
     required super.flags,
     required super.size,
     required super.hasAttachments,
+    super.hasVisibleAttachments,
     required this.textBody,
     required this.htmlBody,
     required this.attachments,
@@ -637,6 +658,9 @@ class BackendMessageDetailDto extends BackendMessageSummaryDto {
       flags: _listOfStrings(json['flags']),
       size: json['size'] as int?,
       hasAttachments: json['has_attachments'] as bool? ?? false,
+      hasVisibleAttachments: json.containsKey('has_visible_attachments')
+          ? json['has_visible_attachments'] as bool? ?? false
+          : null,
       textBody: json['text_body'] as String? ?? '',
       htmlBody: json['html_body'] as String? ?? '',
       attachments: _listOfObjects(
@@ -654,6 +678,7 @@ class BackendAttachmentDto {
     required this.size,
     required this.disposition,
     required this.isInline,
+    required this.contentId,
   });
 
   final String id;
@@ -662,6 +687,7 @@ class BackendAttachmentDto {
   final int? size;
   final String? disposition;
   final bool isInline;
+  final String contentId;
 
   factory BackendAttachmentDto.fromJson(Map<String, dynamic> json) {
     return BackendAttachmentDto(
@@ -671,6 +697,7 @@ class BackendAttachmentDto {
       size: json['size'] as int?,
       disposition: json['disposition'] as String?,
       isInline: json['is_inline'] as bool? ?? false,
+      contentId: json['content_id'] as String? ?? '',
     );
   }
 }
