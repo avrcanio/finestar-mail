@@ -546,9 +546,9 @@ class _SubjectHeader extends StatelessWidget {
                 subject,
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                   color: const Color(0xFF202124),
-                  fontSize: 30,
-                  fontWeight: FontWeight.w500,
-                  height: 1.15,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  height: 1.06,
                   letterSpacing: 0,
                 ),
               ),

@@ -37,6 +37,54 @@ void main() {
     expect(find.text('Show quoted text'), findsOneWidget);
   });
 
+  testWidgets('message detail subject uses compact typography', (tester) async {
+    await tester.pumpWidget(_buildTestApp());
+    await tester.pumpAndSettle();
+
+    final subjectText = tester.widget<Text>(find.text(_thread.subject));
+
+    expect(subjectText.style?.fontSize, 20);
+    expect(subjectText.style?.fontWeight, FontWeight.w600);
+    expect(subjectText.style?.height, 1.06);
+  });
+
+  testWidgets('message detail renders long subject without layout errors', (
+    tester,
+  ) async {
+    const longSubject =
+        'Nuvola Studio: Vasa narudzba od 11 veljace, 2026 je poslana i spremna za preuzimanje';
+    final longSubjectMessage = MailThreadMessage(
+      id: 'long-subject-message',
+      folderId: 'avrcan@finestar.hr:inbox',
+      folderName: 'INBOX',
+      subject: longSubject,
+      sender: 'shop@nuvola.example',
+      recipients: const ['avrcan@finestar.hr'],
+      bodyPlain: 'Long subject body.',
+      bodyHtml: null,
+      receivedAt: DateTime(2026, 4, 16, 11),
+      messageIdHeader: '<long-subject-message@finestar.hr>',
+      inReplyToHeader: null,
+      referencesHeader: null,
+    );
+    final thread = MailThread(
+      subject: longSubject,
+      selectedMessageId: longSubjectMessage.id,
+      messages: [longSubjectMessage],
+    );
+
+    await tester.pumpWidget(
+      _buildTestApp(
+        repository: _FakeMailboxRepository(thread: thread),
+        initialMessageId: longSubjectMessage.id,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text(longSubject), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('collapsed thread item expands when tapped', (tester) async {
     await tester.pumpWidget(_buildTestApp());
     await tester.pumpAndSettle();
