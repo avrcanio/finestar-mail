@@ -1,5 +1,9 @@
 # FS Mail
 
+<p align="center">
+  <img src="assets/images/fs_mail_logo.png" alt="FS Mail Logo" width="300" />
+</p>
+
 FS Mail is an email application project owned by [Fine Star](https://www.finestar.hr).
 
 The project is being developed as a modern mail solution with an Android client and a backend service. It is evolving from direct protocol-based access toward a backend-first architecture, where the client communicates with a dedicated API for authentication, mailbox access, message retrieval, and sending mail.
