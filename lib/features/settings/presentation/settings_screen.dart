@@ -72,7 +72,6 @@ class SettingsScreen extends ConsumerWidget {
                             ),
                           ),
                         ),
-                      const SizedBox(height: 10),
                       _AddAccountButton(
                         label: 'Add another account',
                         onPressed: () => context.push(AppRoute.login.path),

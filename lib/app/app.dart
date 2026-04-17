@@ -158,9 +158,7 @@ class _FinestarMailAppState extends ConsumerState<FinestarMailApp>
     }
 
     if (targetAccount == null) {
-      if (openMessage) {
-        ref.read(appRouterProvider).go(AppRoute.inbox.path);
-      }
+      ref.read(appRouterProvider).go(AppRoute.inbox.path);
       return;
     }
 

@@ -55,7 +55,8 @@ class AuthController extends AsyncNotifier<MailAccount?> {
     if (!ref.mounted) {
       return;
     }
-    state = AsyncData(await repository.getActiveAccount());
+    final account = await repository.getActiveAccount();
+    state = AsyncData(account);
   }
 
   Future<void> removeAccount(String accountId) async {
