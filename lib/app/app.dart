@@ -36,11 +36,6 @@ class _FinestarMailAppState extends ConsumerState<FinestarMailApp>
       _startNotificationListeners();
       _registerAllDevices();
     }, fireImmediately: true);
-    ref.listenManual(accountsProvider, (_, next) {
-      if (next.hasValue) {
-        _registerAllDevices();
-      }
-    }, fireImmediately: true);
   }
 
   @override

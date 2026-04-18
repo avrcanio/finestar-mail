@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
 import 'auth_controller.dart';
 
@@ -22,6 +23,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _displayNameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  var _isRegisteringDevice = false;
 
   @override
   void dispose() {
@@ -36,6 +38,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       return;
     }
 
+    setState(() => _isRegisteringDevice = true);
     final result = await ref
         .read(authControllerProvider.notifier)
         .addAccount(
@@ -48,10 +51,31 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       return;
     }
 
-    result.when(
-      success: (_) => context.go(AppRoute.inbox.path),
-      failure: _showSnackBar,
+    await result.when(
+      success: (account) async {
+        final registered = await ref
+            .read(deviceRegistrationServiceProvider)
+            .registerAccount(account);
+
+        if (!mounted) {
+          return;
+        }
+
+        _showSnackBar(
+          registered
+              ? 'Push notifications enabled for this mailbox.'
+              : 'Mailbox added, but push notification setup did not complete.',
+        );
+        context.go(AppRoute.inbox.path);
+      },
+      failure: (message) async {
+        _showSnackBar(message);
+      },
     );
+
+    if (mounted) {
+      setState(() => _isRegisteringDevice = false);
+    }
   }
 
   void _showSnackBar(String message) {
@@ -63,7 +87,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authControllerProvider);
-    final isBusy = authState.isLoading;
+    final isBusy = authState.isLoading || _isRegisteringDevice;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
@@ -152,7 +176,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           letterSpacing: .35,
                         ),
                       ),
-                      child: Text(isBusy ? 'Connecting...' : 'Add account'),
+                      child: Text(
+                        _isRegisteringDevice
+                            ? 'Setting up...'
+                            : isBusy
+                            ? 'Connecting...'
+                            : 'Add account',
+                      ),
                     ),
                   ],
                 ),
