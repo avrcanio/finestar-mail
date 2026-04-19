@@ -166,6 +166,7 @@ void main() {
 
     expect(find.text('Pinned important'), findsOneWidget);
     expect(find.text('Sent'), findsNothing);
+    expect(find.textContaining('Show '), findsNothing);
     expect(
       find.byKey(
         const ValueKey(
@@ -194,6 +195,7 @@ void main() {
     expect(find.text('Thread reply two'), findsOneWidget);
     expect(find.text('2 replies'), findsOneWidget);
     expect(find.text('Sent'), findsNothing);
+    expect(find.textContaining('Show '), findsNothing);
     expect(
       find.byKey(const ValueKey('latest-conversation-message-reply-2')),
       findsOneWidget,
@@ -202,6 +204,85 @@ void main() {
       tester.getTopLeft(find.text('Thread reply one')).dx,
       greaterThan(tester.getTopLeft(find.text('Thread root')).dx),
     );
+  });
+
+  testWidgets('long conversation collapses and expands without reordering', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildTestApp(
+        repository: _FakeMailboxRepository(
+          threadedConversations: [_longConversation],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Long root'), findsOneWidget);
+    expect(find.text('Long reply one'), findsNothing);
+    expect(find.text('Long reply two'), findsNothing);
+    expect(find.text('Long reply three'), findsNothing);
+    expect(find.text('Long reply four'), findsOneWidget);
+    expect(find.text('Show 3 more'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('latest-conversation-message-long-reply-4')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Show 3 more'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Long reply one'), findsOneWidget);
+    expect(find.text('Long reply two'), findsOneWidget);
+    expect(find.text('Long reply three'), findsOneWidget);
+    expect(find.text('Show less'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Long root')).dy,
+      lessThan(tester.getTopLeft(find.text('Long reply one')).dy),
+    );
+    expect(
+      tester.getTopLeft(find.text('Long reply one')).dy,
+      lessThan(tester.getTopLeft(find.text('Long reply two')).dy),
+    );
+    expect(
+      tester.getTopLeft(find.text('Long reply two')).dy,
+      lessThan(tester.getTopLeft(find.text('Long reply three')).dy),
+    );
+    expect(
+      tester.getTopLeft(find.text('Long reply three')).dy,
+      lessThan(tester.getTopLeft(find.text('Long reply four')).dy),
+    );
+
+    await tester.tap(find.text('Show less'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Long reply one'), findsNothing);
+    expect(find.text('Long reply four'), findsOneWidget);
+    expect(find.text('Show 3 more'), findsOneWidget);
+  });
+
+  testWidgets('expanded conversation state survives refresh', (tester) async {
+    await tester.pumpWidget(
+      _buildTestApp(
+        repository: _FakeMailboxRepository(
+          threadedConversations: [_longConversation],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Show 3 more'));
+    await tester.pumpAndSettle();
+    expect(find.text('Long reply two'), findsOneWidget);
+
+    await tester.drag(find.byType(ListView).last, const Offset(0, 420));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Long reply two'), findsOneWidget);
+    expect(find.text('Show less'), findsOneWidget);
+    expect(find.text('Show 3 more'), findsNothing);
   });
 
   testWidgets('conversation reply tap opens reply detail row', (tester) async {
@@ -558,6 +639,103 @@ final _unifiedConversation = MailConversation(
     ),
     MailConversationMessage(
       message: _unifiedSentReply,
+      direction: MailConversationDirection.outbound,
+    ),
+  ],
+);
+
+final _longRoot = MailMessageSummary(
+  id: 'long-root',
+  folderId: 'app-test-2@finestar.hr:inbox',
+  subject: 'Long root',
+  sender: 'client@finestar.hr',
+  preview: 'Long root preview',
+  receivedAt: DateTime(2026, 4, 16, 8),
+  isRead: true,
+  hasAttachments: false,
+  sequence: 40,
+);
+
+final _longReplyOne = MailMessageSummary(
+  id: 'long-reply-1',
+  folderId: 'app-test-2@finestar.hr:inbox',
+  subject: 'Long reply one',
+  sender: 'app-test-2@finestar.hr',
+  preview: 'Long reply one preview',
+  receivedAt: DateTime(2026, 4, 16, 9),
+  isRead: true,
+  hasAttachments: false,
+  sequence: 41,
+);
+
+final _longReplyTwo = MailMessageSummary(
+  id: 'long-reply-2',
+  folderId: 'app-test-2@finestar.hr:inbox',
+  subject: 'Long reply two',
+  sender: 'client@finestar.hr',
+  preview: 'Long reply two preview',
+  receivedAt: DateTime(2026, 4, 16, 10),
+  isRead: true,
+  hasAttachments: false,
+  sequence: 42,
+);
+
+final _longReplyThree = MailMessageSummary(
+  id: 'long-reply-3',
+  folderId: 'app-test-2@finestar.hr:inbox',
+  subject: 'Long reply three',
+  sender: 'client@finestar.hr',
+  preview: 'Long reply three preview',
+  receivedAt: DateTime(2026, 4, 16, 11),
+  isRead: true,
+  hasAttachments: false,
+  sequence: 43,
+);
+
+final _longReplyFour = MailMessageSummary(
+  id: 'long-reply-4',
+  folderId: 'app-test-2@finestar.hr:sent',
+  subject: 'Long reply four',
+  sender: 'app-test-2@finestar.hr',
+  preview: 'Long reply four preview',
+  receivedAt: DateTime(2026, 4, 16, 12),
+  isRead: true,
+  hasAttachments: false,
+  sequence: 44,
+);
+
+final _longConversation = MailConversation(
+  id: 'long-conversation',
+  messageCount: 5,
+  replyCount: 4,
+  hasUnread: false,
+  hasAttachments: false,
+  hasVisibleAttachments: false,
+  participants: const [
+    MailConversationParticipant(name: 'Client', email: 'client@finestar.hr'),
+  ],
+  rootMessage: _longRoot,
+  replies: [_longReplyOne, _longReplyTwo, _longReplyThree, _longReplyFour],
+  latestDate: DateTime(2026, 4, 16, 12),
+  timelineMessages: [
+    MailConversationMessage(
+      message: _longRoot,
+      direction: MailConversationDirection.inbound,
+    ),
+    MailConversationMessage(
+      message: _longReplyOne,
+      direction: MailConversationDirection.outbound,
+    ),
+    MailConversationMessage(
+      message: _longReplyTwo,
+      direction: MailConversationDirection.inbound,
+    ),
+    MailConversationMessage(
+      message: _longReplyThree,
+      direction: MailConversationDirection.inbound,
+    ),
+    MailConversationMessage(
+      message: _longReplyFour,
       direction: MailConversationDirection.outbound,
     ),
   ],

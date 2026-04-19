@@ -815,6 +815,7 @@ class _MailboxContent extends ConsumerStatefulWidget {
 
 class _MailboxContentState extends ConsumerState<_MailboxContent> {
   final _scrollController = ScrollController();
+  final _expandedConversationIds = <String>{};
 
   @override
   void initState() {
@@ -829,8 +830,29 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant _MailboxContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.folder.id != widget.folder.id) {
+      _expandedConversationIds.clear();
+    }
+  }
+
   void _maybeLoadMore() {
     return;
+  }
+
+  bool _isConversationCollapsed(MailConversation conversation) {
+    return conversation.messages.length > 3 &&
+        !_expandedConversationIds.contains(conversation.id);
+  }
+
+  void _toggleConversationExpanded(String conversationId) {
+    setState(() {
+      if (!_expandedConversationIds.add(conversationId)) {
+        _expandedConversationIds.remove(conversationId);
+      }
+    });
   }
 
   @override
@@ -901,6 +923,8 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
                 folder: folder,
                 selectedMessageIds: widget.selectedMessageIds,
                 onToggleSelected: widget.onToggleSelected,
+                isConversationCollapsed: _isConversationCollapsed,
+                onToggleConversationExpanded: _toggleConversationExpanded,
               );
             },
             error: (error, stackTrace) => ErrorStateView(
@@ -925,12 +949,16 @@ class _ConversationList extends ConsumerWidget {
     required this.folder,
     required this.selectedMessageIds,
     required this.onToggleSelected,
+    required this.isConversationCollapsed,
+    required this.onToggleConversationExpanded,
   });
 
   final List<MailConversation> conversations;
   final MailFolder folder;
   final Set<String> selectedMessageIds;
   final ValueChanged<String> onToggleSelected;
+  final bool Function(MailConversation conversation) isConversationCollapsed;
+  final ValueChanged<String> onToggleConversationExpanded;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -944,6 +972,9 @@ class _ConversationList extends ConsumerWidget {
               folder: folder,
               selectedMessageIds: selectedMessageIds,
               selectionActive: selectedMessageIds.isNotEmpty,
+              isCollapsed: isConversationCollapsed(conversation),
+              onToggleCollapsed: () =>
+                  onToggleConversationExpanded(conversation.id),
               onToggleSelected: onToggleSelected,
               onShowActions: _showMessageActions,
             ),

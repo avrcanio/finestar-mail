@@ -14,6 +14,8 @@ class ConversationCard extends StatelessWidget {
     required this.folder,
     required this.selectedMessageIds,
     required this.selectionActive,
+    required this.isCollapsed,
+    required this.onToggleCollapsed,
     required this.onToggleSelected,
     required this.onShowActions,
   });
@@ -22,12 +24,15 @@ class ConversationCard extends StatelessWidget {
   final MailFolder folder;
   final Set<String> selectedMessageIds;
   final bool selectionActive;
+  final bool isCollapsed;
+  final VoidCallback onToggleCollapsed;
   final ValueChanged<String> onToggleSelected;
   final MessageActionCallback onShowActions;
 
   @override
   Widget build(BuildContext context) {
     final messages = conversationTimelinePreview(conversation);
+    final canCollapse = messages.length > 3;
     return SectionCard(
       color:
           messages.any(
@@ -41,6 +46,9 @@ class ConversationCard extends StatelessWidget {
       child: ConversationTimeline(
         conversation: conversation,
         messages: messages,
+        isCollapsed: canCollapse && isCollapsed,
+        showCollapseToggle: canCollapse,
+        onToggleCollapsed: onToggleCollapsed,
         folder: folder,
         selectedMessageIds: selectedMessageIds,
         selectionActive: selectionActive,
@@ -56,6 +64,9 @@ class ConversationTimeline extends StatelessWidget {
     super.key,
     required this.conversation,
     required this.messages,
+    required this.isCollapsed,
+    required this.showCollapseToggle,
+    required this.onToggleCollapsed,
     required this.folder,
     required this.selectedMessageIds,
     required this.selectionActive,
@@ -65,6 +76,9 @@ class ConversationTimeline extends StatelessWidget {
 
   final MailConversation conversation;
   final List<MailConversationMessage> messages;
+  final bool isCollapsed;
+  final bool showCollapseToggle;
+  final VoidCallback onToggleCollapsed;
   final MailFolder folder;
   final Set<String> selectedMessageIds;
   final bool selectionActive;
@@ -73,22 +87,100 @@ class ConversationTimeline extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final visibleItems = _visibleItems(messages, isCollapsed);
+
     return Column(
       children: [
-        for (var index = 0; index < messages.length; index++)
+        for (var index = 0; index < visibleItems.length; index++) ...[
+          if (index == 1 && showCollapseToggle)
+            ConversationCollapseToggle(
+              key: ValueKey('conversation-collapse-toggle-${conversation.id}'),
+              isCollapsed: isCollapsed,
+              hiddenMessageCount: _hiddenMessageCount(messages, isCollapsed),
+              onPressed: onToggleCollapsed,
+            ),
           ConversationTimelineItem(
             conversation: conversation,
-            item: messages[index],
+            item: visibleItems[index],
             folder: folder,
-            selected: selectedMessageIds.contains(messages[index].message.id),
+            selected: selectedMessageIds.contains(
+              visibleItems[index].message.id,
+            ),
             selectionActive: selectionActive,
             onToggleSelected: onToggleSelected,
             onShowActions: onShowActions,
-            isRoot: index == 0,
-            isLast: index == messages.length - 1,
-            isLatestInConversation: index == messages.length - 1,
+            isRoot: identical(visibleItems[index], messages.first),
+            isLast: index == visibleItems.length - 1,
+            isLatestInConversation:
+                visibleItems[index].message.id == messages.last.message.id,
+          ),
+        ],
+        if (showCollapseToggle && visibleItems.length <= 1)
+          ConversationCollapseToggle(
+            key: ValueKey('conversation-collapse-toggle-${conversation.id}'),
+            isCollapsed: isCollapsed,
+            hiddenMessageCount: _hiddenMessageCount(messages, isCollapsed),
+            onPressed: onToggleCollapsed,
           ),
       ],
+    );
+  }
+
+  List<MailConversationMessage> _visibleItems(
+    List<MailConversationMessage> messages,
+    bool isCollapsed,
+  ) {
+    if (!isCollapsed || messages.length <= 3) {
+      return messages;
+    }
+    if (messages.first.message.id == messages.last.message.id) {
+      return [messages.first];
+    }
+    return [messages.first, messages.last];
+  }
+
+  int _hiddenMessageCount(
+    List<MailConversationMessage> messages,
+    bool isCollapsed,
+  ) {
+    if (!isCollapsed || messages.length <= 3) {
+      return 0;
+    }
+    final visibleCount = messages.first.message.id == messages.last.message.id
+        ? 1
+        : 2;
+    return (messages.length - visibleCount).clamp(0, messages.length);
+  }
+}
+
+class ConversationCollapseToggle extends StatelessWidget {
+  const ConversationCollapseToggle({
+    super.key,
+    required this.isCollapsed,
+    required this.hiddenMessageCount,
+    required this.onPressed,
+  });
+
+  final bool isCollapsed;
+  final int hiddenMessageCount;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = isCollapsed ? 'Show $hiddenMessageCount more' : 'Show less';
+    return Padding(
+      padding: const EdgeInsets.only(left: 42),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: onPressed,
+          icon: Icon(
+            isCollapsed ? Icons.expand_more : Icons.expand_less,
+            size: 18,
+          ),
+          label: Text(label),
+        ),
+      ),
     );
   }
 }
