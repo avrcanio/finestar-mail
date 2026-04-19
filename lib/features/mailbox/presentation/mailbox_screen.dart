@@ -5,7 +5,6 @@ import 'package:finestar_mail/core/widgets/state_views.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
@@ -15,6 +14,8 @@ import '../domain/entities/mail_conversation.dart';
 import '../domain/entities/mail_folder.dart';
 import '../domain/entities/mail_message_summary.dart';
 import 'mailbox_controller.dart';
+import 'widgets/conversation_card.dart';
+import 'widgets/message_list_tile.dart';
 
 class MailboxScreen extends ConsumerStatefulWidget {
   const MailboxScreen({super.key});
@@ -938,59 +939,13 @@ class _ConversationList extends ConsumerWidget {
         for (final conversation in conversations)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
-            child: SectionCard(
-              color: conversation.messages.any(
-                    (message) => selectedMessageIds.contains(message.message.id),
-                  )
-                  ? const Color(0xFFD7EAFE)
-                  : conversation.hasUnread
-                  ? const Color(0xFFEAF4FF)
-                  : Colors.white,
-              padding: const EdgeInsets.all(0),
-              child: Column(
-                children: [
-                  for (
-                    var index = 0;
-                    index < conversation.messages.length;
-                    index++
-                  )
-                    if (index == 0)
-                      _MessageListTile(
-                        message: conversation.messages[index].message,
-                        folder: folder,
-                        selected: selectedMessageIds.contains(
-                          conversation.messages[index].message.id,
-                        ),
-                        selectionEnabled: true,
-                        selectionActive: selectedMessageIds.isNotEmpty,
-                        onToggleSelected: onToggleSelected,
-                        onShowActions: _showMessageActions,
-                        hasAttachments: conversation.hasVisibleAttachments,
-                        isUnread: conversation.hasUnread,
-                        isImportant:
-                            conversation.messages[index].message.isImportant,
-                        isPinned: conversation.messages[index].message.isPinned,
-                        replyCount: conversation.replyCount,
-                        direction: conversation.messages[index].direction,
-                      )
-                    else
-                      _ThreadReplyRow(
-                        isLast: index == conversation.messages.length - 1,
-                        child: _MessageListTile(
-                          message: conversation.messages[index].message,
-                          folder: folder,
-                          selected: selectedMessageIds.contains(
-                            conversation.messages[index].message.id,
-                          ),
-                          selectionEnabled: true,
-                          selectionActive: selectedMessageIds.isNotEmpty,
-                          onToggleSelected: onToggleSelected,
-                          onShowActions: _showMessageActions,
-                          direction: conversation.messages[index].direction,
-                        ),
-                      ),
-                ],
-              ),
+            child: ConversationCard(
+              conversation: conversation,
+              folder: folder,
+              selectedMessageIds: selectedMessageIds,
+              selectionActive: selectedMessageIds.isNotEmpty,
+              onToggleSelected: onToggleSelected,
+              onShowActions: _showMessageActions,
             ),
           ),
       ],
@@ -1008,34 +963,6 @@ class _ConversationList extends ConsumerWidget {
       ref: ref,
       message: message,
       folder: folder,
-    );
-  }
-}
-
-class _ThreadReplyRow extends StatelessWidget {
-  const _ThreadReplyRow({required this.isLast, required this.child});
-
-  final bool isLast;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 42,
-          child: Align(
-            alignment: Alignment.topCenter,
-            child: Container(
-              width: 2,
-              height: isLast ? 58 : 92,
-              color: const Color(0xFFDADCE0),
-            ),
-          ),
-        ),
-        Expanded(child: child),
-      ],
     );
   }
 }
@@ -1070,7 +997,7 @@ class _MessageList extends ConsumerWidget {
                 ? Colors.white
                 : const Color(0xFFEAF4FF),
             padding: const EdgeInsets.all(0),
-            child: _MessageListTile(
+            child: MailMessageListTile(
               message: message,
               folder: folder,
               selected: selected,
@@ -1097,183 +1024,6 @@ class _MessageList extends ConsumerWidget {
       message: message,
       folder: folder,
     );
-  }
-}
-
-class _MessageListTile extends StatelessWidget {
-  const _MessageListTile({
-    required this.message,
-    required this.folder,
-    required this.selected,
-    required this.selectionEnabled,
-    required this.selectionActive,
-    required this.onToggleSelected,
-    required this.onShowActions,
-    this.hasAttachments,
-    this.isUnread,
-    this.isImportant,
-    this.isPinned,
-    this.replyCount = 0,
-    this.direction = MailConversationDirection.inbound,
-  });
-
-  final MailMessageSummary message;
-  final MailFolder folder;
-  final bool selected;
-  final bool selectionEnabled;
-  final bool selectionActive;
-  final ValueChanged<String> onToggleSelected;
-  final Future<void> Function({
-    required BuildContext context,
-    required WidgetRef ref,
-    required MailMessageSummary message,
-    required MailFolder folder,
-  })
-  onShowActions;
-  final bool? hasAttachments;
-  final bool? isUnread;
-  final bool? isImportant;
-  final bool? isPinned;
-  final int replyCount;
-  final MailConversationDirection direction;
-
-  @override
-  Widget build(BuildContext context) {
-    final formatter = DateFormat('MMM d');
-    final effectiveUnread = isUnread ?? !message.isRead;
-    final effectiveImportant = isImportant ?? message.isImportant;
-    final effectivePinned = isPinned ?? message.isPinned;
-    final effectiveHasAttachments = hasAttachments ?? message.hasAttachments;
-    final isOutbound = direction == MailConversationDirection.outbound;
-
-    return Consumer(
-      builder: (context, ref, child) {
-        return ListTile(
-          onLongPress: () => onShowActions(
-            context: context,
-            ref: ref,
-            message: message,
-            folder: folder,
-          ),
-          onTap: selectionActive && selectionEnabled
-              ? () => onToggleSelected(message.id)
-              : () => context.push(
-                  AppRoute.messageDetail.path.replaceFirst(':id', message.id),
-                ),
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 10,
-          ),
-          leading: Tooltip(
-            message: 'Select message',
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: selectionEnabled
-                  ? () => onToggleSelected(message.id)
-                  : null,
-              child: CircleAvatar(
-                backgroundColor: selected
-                    ? Theme.of(context).colorScheme.primary
-                    : const Color(0xFFE8EFF8),
-                child: selected
-                    ? const Icon(Icons.check, color: Colors.white, size: 20)
-                    : Text(
-                        _senderInitial(message.sender),
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.primary,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-              ),
-            ),
-          ),
-          title: Row(
-            children: [
-              if (isOutbound) ...[
-                const Icon(Icons.send_outlined, size: 15),
-                const SizedBox(width: 5),
-                Text(
-                  'Sent',
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: const Color(0xFF2563A8),
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(width: 8),
-              ],
-              Expanded(
-                child: Text(
-                  message.subject,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontWeight: effectiveUnread
-                        ? FontWeight.w800
-                        : FontWeight.w500,
-                  ),
-                ),
-              ),
-              if (replyCount > 0) ...[
-                const SizedBox(width: 8),
-                Text(
-                  '$replyCount replies',
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: const Color(0xFF5F6368),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ],
-          ),
-          subtitle: Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              '${message.sender}\n${message.preview}',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          trailing: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(formatter.format(message.receivedAt)),
-              const SizedBox(height: 6),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (effectiveImportant)
-                    const Icon(Icons.error, size: 16, color: Color(0xFFD93025)),
-                  if (effectivePinned)
-                    const Padding(
-                      padding: EdgeInsets.only(left: 4),
-                      child: Icon(
-                        Icons.push_pin,
-                        size: 16,
-                        color: Color(0xFF153B52),
-                      ),
-                    ),
-                  if (effectiveHasAttachments)
-                    const Padding(
-                      padding: EdgeInsets.only(left: 4),
-                      child: Icon(Icons.attach_file, size: 16),
-                    ),
-                ],
-              ),
-            ],
-          ),
-          isThreeLine: true,
-        );
-      },
-    );
-  }
-
-  String _senderInitial(String sender) {
-    final trimmed = sender.trim();
-    if (trimmed.isEmpty) {
-      return '?';
-    }
-    return trimmed.characters.first.toUpperCase();
   }
 }
 
