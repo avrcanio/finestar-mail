@@ -154,6 +154,28 @@ void main() {
     expect(find.byIcon(Icons.attach_file), findsOneWidget);
   });
 
+  testWidgets('search results do not receive conversation-only styling', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_buildTestApp());
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'Pinned');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pinned important'), findsOneWidget);
+    expect(find.text('Sent'), findsNothing);
+    expect(
+      find.byKey(
+        const ValueKey(
+          'latest-conversation-message-app-test-2@finestar.hr:inbox:imap:2',
+        ),
+      ),
+      findsNothing,
+    );
+  });
+
   testWidgets('mailbox renders backend conversations expanded by default', (
     tester,
   ) async {
@@ -167,9 +189,15 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Thread root'), findsOneWidget);
+    expect(find.text('Re: Fwd: Thread root'), findsNothing);
     expect(find.text('Thread reply one'), findsOneWidget);
     expect(find.text('Thread reply two'), findsOneWidget);
     expect(find.text('2 replies'), findsOneWidget);
+    expect(find.text('Sent'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('latest-conversation-message-reply-2')),
+      findsOneWidget,
+    );
     expect(
       tester.getTopLeft(find.text('Thread reply one')).dx,
       greaterThan(tester.getTopLeft(find.text('Thread root')).dx),
@@ -201,6 +229,10 @@ void main() {
     expect(find.text('Unified root'), findsOneWidget);
     expect(find.text('Unified sent reply'), findsOneWidget);
     expect(find.text('Sent'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('latest-conversation-message-unified-sent-1')),
+      findsOneWidget,
+    );
     expect(find.byIcon(Icons.attach_file), findsOneWidget);
 
     await tester.tap(find.text('Unified sent reply'));
@@ -433,7 +465,7 @@ const _inboxFolder = MailFolder(
 final _threadRoot = MailMessageSummary(
   id: 'root-1',
   folderId: 'app-test-2@finestar.hr:inbox',
-  subject: 'Thread root',
+  subject: 'Re: Fwd: Thread root',
   sender: 'client@finestar.hr',
   preview: 'Root preview',
   receivedAt: DateTime(2026, 4, 16, 8),
@@ -1001,5 +1033,16 @@ class _FakeMailboxRepository implements MailboxRepository {
     required MailFolder folder,
     required String query,
     int limit = 30,
-  }) async => const [];
+  }) async {
+    final normalizedQuery = query.toLowerCase();
+    return messages
+        .where(
+          (message) =>
+              message.subject.toLowerCase().contains(normalizedQuery) ||
+              message.sender.toLowerCase().contains(normalizedQuery) ||
+              message.preview.toLowerCase().contains(normalizedQuery),
+        )
+        .take(limit)
+        .toList();
+  }
 }
