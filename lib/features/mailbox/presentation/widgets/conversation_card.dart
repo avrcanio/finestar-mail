@@ -7,6 +7,11 @@ import '../../domain/entities/mail_message_summary.dart';
 import 'conversation_display_helpers.dart';
 import 'message_list_tile.dart';
 
+const _threadRailWidth = 40.0;
+const _threadRailColor = Color(0xFFB7D7F8);
+const _threadRailAccentColor = Color(0xFF2563A8);
+const _replyBackgroundColor = Color(0xFFF8FBFF);
+
 class ConversationCard extends StatelessWidget {
   const ConversationCard({
     super.key,
@@ -169,17 +174,43 @@ class ConversationCollapseToggle extends StatelessWidget {
   Widget build(BuildContext context) {
     final label = isCollapsed ? 'Show $hiddenMessageCount more' : 'Show less';
     return Padding(
-      padding: const EdgeInsets.only(left: 42),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: TextButton.icon(
-          onPressed: onPressed,
-          icon: Icon(
-            isCollapsed ? Icons.expand_more : Icons.expand_less,
-            size: 18,
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const SizedBox(
+            width: _threadRailWidth,
+            height: 40,
+            child: _ThreadRailSegment(showDot: true, isLast: false),
           ),
-          label: Text(label),
-        ),
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: onPressed,
+                style: TextButton.styleFrom(
+                  foregroundColor: _threadRailAccentColor,
+                  backgroundColor: const Color(0xFFEAF4FF),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 7,
+                  ),
+                  minimumSize: const Size(0, 36),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    side: const BorderSide(color: _threadRailColor),
+                  ),
+                ),
+                icon: Icon(
+                  isCollapsed ? Icons.expand_more : Icons.expand_less,
+                  size: 18,
+                ),
+                label: Text(label),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -242,7 +273,7 @@ class ConversationTimelineItem extends StatelessWidget {
     );
 
     if (isRoot) {
-      return tile;
+      return Padding(padding: const EdgeInsets.only(bottom: 2), child: tile);
     }
 
     return _ThreadReplyRow(isLast: isLast, child: tile);
@@ -312,17 +343,63 @@ class _ThreadReplyRow extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 42,
-          child: Align(
-            alignment: Alignment.topCenter,
-            child: Container(
-              width: 2,
-              height: isLast ? 58 : 92,
-              color: const Color(0xFFDADCE0),
+          width: _threadRailWidth,
+          height: isLast ? 74 : 96,
+          child: _ThreadRailSegment(showDot: true, isLast: isLast),
+        ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.only(right: 2, bottom: 4),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: _replyBackgroundColor,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFFE5EEF8)),
+              ),
+              child: child,
             ),
           ),
         ),
-        Expanded(child: child),
+      ],
+    );
+  }
+}
+
+class _ThreadRailSegment extends StatelessWidget {
+  const _ThreadRailSegment({required this.showDot, required this.isLast});
+
+  final bool showDot;
+  final bool isLast;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      alignment: Alignment.topCenter,
+      children: [
+        Positioned(
+          top: 0,
+          bottom: isLast ? 28 : 0,
+          child: Container(
+            width: 3,
+            decoration: BoxDecoration(
+              color: _threadRailColor,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
+        if (showDot)
+          Positioned(
+            top: 18,
+            child: Container(
+              width: 9,
+              height: 9,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(color: _threadRailAccentColor, width: 2),
+              ),
+            ),
+          ),
       ],
     );
   }
