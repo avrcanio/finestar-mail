@@ -6,10 +6,12 @@ import 'package:finestar_mail/features/auth/domain/entities/connection_settings.
 import 'package:finestar_mail/features/auth/domain/entities/mail_account.dart';
 import 'package:finestar_mail/features/auth/domain/repositories/auth_repository.dart';
 import 'package:finestar_mail/features/auth/presentation/login_screen.dart';
+import 'package:finestar_mail/features/notifications/data/device_registration_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
 
 void main() {
   testWidgets('login screen uses main-screen style content', (tester) async {
@@ -42,6 +44,77 @@ void main() {
     expect(find.text('Password is required.'), findsOneWidget);
   });
 
+  testWidgets('password reveal is press-and-hold only', (tester) async {
+    await tester.pumpWidget(_buildTestApp(_FakeAuthRepository()));
+    await tester.pumpAndSettle();
+
+    final eyeIcon = find.byTooltip('Hold to show password');
+
+    expect(_passwordEditableText(tester).obscureText, isTrue);
+    expect(eyeIcon, findsOneWidget);
+
+    final gesture = await tester.createGesture();
+    await gesture.down(tester.getCenter(eyeIcon));
+    await tester.pump();
+
+    expect(_passwordEditableText(tester).obscureText, isFalse);
+
+    await gesture.up();
+    await tester.pump();
+
+    expect(_passwordEditableText(tester).obscureText, isTrue);
+  });
+
+  testWidgets('password reveal hides again after pointer cancel', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_buildTestApp(_FakeAuthRepository()));
+    await tester.pumpAndSettle();
+
+    final eyeIcon = find.byTooltip('Hold to show password');
+
+    final gesture = await tester.createGesture();
+    await gesture.down(tester.getCenter(eyeIcon));
+    await tester.pump();
+
+    expect(_passwordEditableText(tester).obscureText, isFalse);
+
+    await gesture.cancel();
+    await tester.pump();
+
+    expect(_passwordEditableText(tester).obscureText, isTrue);
+  });
+
+  testWidgets('holding password eye does not steal password field focus', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_buildTestApp(_FakeAuthRepository()));
+    await tester.pumpAndSettle();
+
+    final passwordField = find.byType(TextFormField).at(2);
+    final eyeIcon = find.byTooltip('Hold to show password');
+
+    await tester.tap(passwordField);
+    await tester.enterText(passwordField, 'secret');
+    await tester.pump();
+
+    expect(tester.testTextInput.isVisible, isTrue);
+    expect(_passwordEditableText(tester).obscureText, isTrue);
+
+    final gesture = await tester.createGesture();
+    await gesture.down(tester.getCenter(eyeIcon));
+    await tester.pump();
+
+    expect(tester.testTextInput.isVisible, isTrue);
+    expect(_passwordEditableText(tester).obscureText, isFalse);
+
+    await gesture.up();
+    await tester.pump();
+
+    expect(tester.testTextInput.isVisible, isTrue);
+    expect(_passwordEditableText(tester).obscureText, isTrue);
+  });
+
   testWidgets('add account still navigates to inbox on success', (
     tester,
   ) async {
@@ -62,6 +135,15 @@ void main() {
   });
 }
 
+EditableText _passwordEditableText(WidgetTester tester) {
+  return tester.widget<EditableText>(
+    find.descendant(
+      of: find.byType(TextFormField).at(2),
+      matching: find.byType(EditableText),
+    ),
+  );
+}
+
 Widget _buildTestApp(_FakeAuthRepository repository) {
   final router = GoRouter(
     initialLocation: AppRoute.login.path,
@@ -79,8 +161,28 @@ Widget _buildTestApp(_FakeAuthRepository repository) {
   );
 
   return ProviderScope(
-    overrides: [authRepositoryProvider.overrideWith((ref) => repository)],
+    overrides: [
+      authRepositoryProvider.overrideWith((ref) => repository),
+      deviceRegistrationServiceProvider.overrideWith(
+        (ref) => _disabledDeviceRegistrationService(),
+      ),
+    ],
     child: MaterialApp.router(theme: buildAppTheme(), routerConfig: router),
+  );
+}
+
+DeviceRegistrationService _disabledDeviceRegistrationService() {
+  return DeviceRegistrationService(
+    config: const DeviceRegistrationConfig(
+      apiBaseUrl: '',
+      registrationSecret: '',
+    ),
+    httpClient: http.Client(),
+    fcmTokenLoader: () async => null,
+    authTokenLoader: (_) async => null,
+    permissionRequester: () async {},
+    appVersionLoader: () async => 'test',
+    platform: 'test',
   );
 }
 

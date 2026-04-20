@@ -222,7 +222,7 @@ class _LoginCard extends StatelessWidget {
   }
 }
 
-class _LoginTextField extends StatelessWidget {
+class _LoginTextField extends StatefulWidget {
   const _LoginTextField({
     required this.controller,
     required this.labelText,
@@ -242,21 +242,49 @@ class _LoginTextField extends StatelessWidget {
   final ValueChanged<String>? onFieldSubmitted;
 
   @override
+  State<_LoginTextField> createState() => _LoginTextFieldState();
+}
+
+class _LoginTextFieldState extends State<_LoginTextField> {
+  var _isPasswordVisible = false;
+
+  @override
+  void didUpdateWidget(covariant _LoginTextField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.obscureText && _isPasswordVisible) {
+      _hidePassword();
+    }
+  }
+
+  void _showPassword() {
+    if (!_isPasswordVisible) {
+      setState(() => _isPasswordVisible = true);
+    }
+  }
+
+  void _hidePassword() {
+    if (_isPasswordVisible) {
+      setState(() => _isPasswordVisible = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final primaryColor = theme.colorScheme.primary;
+    final effectiveObscureText = widget.obscureText && !_isPasswordVisible;
 
     return DecoratedBox(
       decoration: const BoxDecoration(
         border: Border(bottom: BorderSide(color: _fieldStroke)),
       ),
       child: TextFormField(
-        controller: controller,
-        keyboardType: keyboardType,
-        obscureText: obscureText,
-        textInputAction: textInputAction,
-        validator: validator,
-        onFieldSubmitted: onFieldSubmitted,
+        controller: widget.controller,
+        keyboardType: widget.keyboardType,
+        obscureText: effectiveObscureText,
+        textInputAction: widget.textInputAction,
+        validator: widget.validator,
+        onFieldSubmitted: widget.onFieldSubmitted,
         cursorColor: primaryColor,
         style: theme.textTheme.bodyLarge?.copyWith(
           color: const Color(0xFF202124),
@@ -264,7 +292,7 @@ class _LoginTextField extends StatelessWidget {
           letterSpacing: .25,
         ),
         decoration: InputDecoration(
-          labelText: labelText,
+          labelText: widget.labelText,
           floatingLabelStyle: theme.textTheme.bodySmall?.copyWith(
             color: primaryColor,
             fontSize: 12,
@@ -282,6 +310,51 @@ class _LoginTextField extends StatelessWidget {
           focusedErrorBorder: InputBorder.none,
           filled: false,
           contentPadding: const EdgeInsets.symmetric(vertical: 18),
+          suffixIcon: widget.obscureText
+              ? _PasswordVisibilityHoldIcon(
+                  visible: _isPasswordVisible,
+                  onPressStart: _showPassword,
+                  onPressEnd: _hidePassword,
+                )
+              : null,
+        ),
+      ),
+    );
+  }
+}
+
+class _PasswordVisibilityHoldIcon extends StatelessWidget {
+  const _PasswordVisibilityHoldIcon({
+    required this.visible,
+    required this.onPressStart,
+    required this.onPressEnd,
+  });
+
+  final bool visible;
+  final VoidCallback onPressStart;
+  final VoidCallback onPressEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (_) => onPressStart(),
+      onPointerUp: (_) => onPressEnd(),
+      onPointerCancel: (_) => onPressEnd(),
+      child: Tooltip(
+        message: 'Hold to show password',
+        child: Semantics(
+          label: 'Hold to show password',
+          button: true,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Icon(
+              visible
+                  ? Icons.visibility_off_outlined
+                  : Icons.visibility_outlined,
+              color: _mutedText,
+            ),
+          ),
         ),
       ),
     );
