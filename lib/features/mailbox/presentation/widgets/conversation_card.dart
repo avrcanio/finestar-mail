@@ -22,6 +22,7 @@ class ConversationCard extends StatelessWidget {
     required this.isCollapsed,
     required this.onToggleCollapsed,
     required this.onToggleSelected,
+    required this.onDeletedMessages,
     required this.onShowActions,
   });
 
@@ -32,6 +33,7 @@ class ConversationCard extends StatelessWidget {
   final bool isCollapsed;
   final VoidCallback onToggleCollapsed;
   final ValueChanged<String> onToggleSelected;
+  final ValueChanged<Set<String>> onDeletedMessages;
   final MessageActionCallback onShowActions;
 
   @override
@@ -58,6 +60,7 @@ class ConversationCard extends StatelessWidget {
         selectedMessageIds: selectedMessageIds,
         selectionActive: selectionActive,
         onToggleSelected: onToggleSelected,
+        onDeletedMessages: onDeletedMessages,
         onShowActions: onShowActions,
       ),
     );
@@ -76,6 +79,7 @@ class ConversationTimeline extends StatelessWidget {
     required this.selectedMessageIds,
     required this.selectionActive,
     required this.onToggleSelected,
+    required this.onDeletedMessages,
     required this.onShowActions,
   });
 
@@ -88,6 +92,7 @@ class ConversationTimeline extends StatelessWidget {
   final Set<String> selectedMessageIds;
   final bool selectionActive;
   final ValueChanged<String> onToggleSelected;
+  final ValueChanged<Set<String>> onDeletedMessages;
   final MessageActionCallback onShowActions;
 
   @override
@@ -113,6 +118,7 @@ class ConversationTimeline extends StatelessWidget {
             ),
             selectionActive: selectionActive,
             onToggleSelected: onToggleSelected,
+            onDeletedMessages: onDeletedMessages,
             onShowActions: onShowActions,
             isRoot: identical(visibleItems[index], messages.first),
             isLast: index == visibleItems.length - 1,
@@ -225,6 +231,7 @@ class ConversationTimelineItem extends StatelessWidget {
     required this.selected,
     required this.selectionActive,
     required this.onToggleSelected,
+    required this.onDeletedMessages,
     required this.onShowActions,
     required this.isRoot,
     required this.isLast,
@@ -237,6 +244,7 @@ class ConversationTimelineItem extends StatelessWidget {
   final bool selected;
   final bool selectionActive;
   final ValueChanged<String> onToggleSelected;
+  final ValueChanged<Set<String>> onDeletedMessages;
   final MessageActionCallback onShowActions;
   final bool isRoot;
   final bool isLast;
@@ -252,6 +260,7 @@ class ConversationTimelineItem extends StatelessWidget {
       selectionEnabled: true,
       selectionActive: selectionActive,
       onToggleSelected: onToggleSelected,
+      onDeletedMessages: onDeletedMessages,
       onShowActions: onShowActions,
       hasAttachments: isRoot ? conversation.hasVisibleAttachments : null,
       isUnread: isRoot ? conversation.hasUnread : null,

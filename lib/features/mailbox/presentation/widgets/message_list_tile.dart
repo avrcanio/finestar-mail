@@ -7,6 +7,7 @@ import '../../../../app/router/app_route.dart';
 import '../../domain/entities/mail_conversation.dart';
 import '../../domain/entities/mail_folder.dart';
 import '../../domain/entities/mail_message_summary.dart';
+import '../message_detail_route_result.dart';
 
 typedef MessageActionCallback =
     Future<void> Function({
@@ -36,6 +37,7 @@ class MailMessageListTile extends StatelessWidget {
     this.title,
     this.showOutboundBadge = false,
     this.isLatestInConversation = false,
+    this.onDeletedMessages,
   });
 
   final MailMessageSummary message;
@@ -55,6 +57,7 @@ class MailMessageListTile extends StatelessWidget {
   final Widget? title;
   final bool showOutboundBadge;
   final bool isLatestInConversation;
+  final ValueChanged<Set<String>>? onDeletedMessages;
 
   @override
   Widget build(BuildContext context) {
@@ -78,9 +81,7 @@ class MailMessageListTile extends StatelessWidget {
           ),
           onTap: selectionActive && selectionEnabled
               ? () => onToggleSelected(message.id)
-              : () => context.push(
-                  AppRoute.messageDetail.path.replaceFirst(':id', message.id),
-                ),
+              : () => _openDetail(context),
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 16,
             vertical: 10,
@@ -173,6 +174,16 @@ class MailMessageListTile extends StatelessWidget {
       return '?';
     }
     return trimmed.characters.first.toUpperCase();
+  }
+
+  Future<void> _openDetail(BuildContext context) async {
+    final result = await context.push<MessageDetailRouteResult>(
+      AppRoute.messageDetail.path.replaceFirst(':id', message.id),
+    );
+    final deletedMessageIds = result?.deletedMessageIds ?? const <String>{};
+    if (deletedMessageIds.isNotEmpty && context.mounted) {
+      onDeletedMessages?.call(deletedMessageIds);
+    }
   }
 }
 
