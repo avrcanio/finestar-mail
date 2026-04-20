@@ -97,6 +97,23 @@ class MailboxConversationsController
     );
   }
 
+  void removeMessagesFromState(Iterable<String> messageIds) {
+    final current = state.asData?.value;
+    final removedIds = messageIds.toSet();
+    if (current == null || removedIds.isEmpty) {
+      return;
+    }
+
+    state = AsyncData(
+      current.copyWith(
+        conversations: MailboxDeleteStateRemoval.removeFromConversations(
+          current.conversations,
+          removedIds,
+        ),
+      ),
+    );
+  }
+
   Future<MailDeleteResult> moveSelectedToTrash(List<String> messageIds) async {
     final current = state.asData?.value;
     if (current == null || messageIds.isEmpty) {
@@ -134,16 +151,7 @@ class MailboxConversationsController
       ],
       failed: [for (final result in results) ...result.failed],
     );
-    if (result.movedMessageIds.isNotEmpty) {
-      state = AsyncData(
-        current.copyWith(
-          conversations: _removeMessagesFromConversations(
-            current.conversations,
-            result.movedMessageIds.toSet(),
-          ),
-        ),
-      );
-    }
+    removeMessagesFromState(result.movedMessageIds);
     return result;
   }
 
@@ -189,7 +197,7 @@ class MailboxConversationsController
     if (result.restoredMessageIds.isNotEmpty) {
       state = AsyncData(
         current.copyWith(
-          conversations: _removeMessagesFromConversations(
+          conversations: MailboxDeleteStateRemoval.removeFromConversations(
             current.conversations,
             result.restoredMessageIds.toSet(),
           ),
@@ -216,54 +224,6 @@ class MailboxConversationsController
           forceRefresh: forceRefresh,
         );
     return MailboxConversationsState(conversations: conversations);
-  }
-
-  List<MailConversation> _removeMessagesFromConversations(
-    List<MailConversation> conversations,
-    Set<String> messageIds,
-  ) {
-    return conversations
-        .map((conversation) {
-          final remainingTimeline = conversation.messages
-              .where((message) => !messageIds.contains(message.message.id))
-              .toList();
-          if (remainingTimeline.isEmpty) {
-            return null;
-          }
-          final newRoot = remainingTimeline.first.message;
-          final newReplies = remainingTimeline
-              .skip(1)
-              .map((message) => message.message)
-              .toList();
-          return MailConversation(
-            id: conversation.id,
-            messageCount: remainingTimeline.length,
-            replyCount: newReplies.length,
-            hasUnread:
-                !newRoot.isRead || newReplies.any((reply) => !reply.isRead),
-            hasAttachments:
-                newRoot.hasAttachments ||
-                newReplies.any((reply) => reply.hasAttachments),
-            hasVisibleAttachments:
-                newRoot.hasAttachments ||
-                newReplies.any((reply) => reply.hasAttachments),
-            participants: conversation.participants,
-            rootMessage: newRoot,
-            replies: newReplies,
-            latestDate: newReplies.isEmpty
-                ? newRoot.receivedAt
-                : newReplies
-                      .map((reply) => reply.receivedAt)
-                      .fold(newRoot.receivedAt, _latestDate),
-            timelineMessages: remainingTimeline,
-          );
-        })
-        .whereType<MailConversation>()
-        .toList();
-  }
-
-  DateTime _latestDate(DateTime left, DateTime right) {
-    return right.isAfter(left) ? right : left;
   }
 }
 
@@ -318,6 +278,23 @@ class MailboxMessagesController extends AsyncNotifier<MailboxMessagesState> {
   Future<void> refresh() async {
     state = const AsyncLoading();
     state = await AsyncValue.guard(() => _loadFirstPage(folder));
+  }
+
+  void removeMessagesFromState(Iterable<String> messageIds) {
+    final current = state.asData?.value;
+    final removedIds = messageIds.toSet();
+    if (current == null || removedIds.isEmpty) {
+      return;
+    }
+
+    state = AsyncData(
+      current.copyWith(
+        messages: MailboxDeleteStateRemoval.removeFromMessages(
+          current.messages,
+          removedIds,
+        ),
+      ),
+    );
   }
 
   Future<void> loadMore() async {
@@ -386,16 +363,7 @@ class MailboxMessagesController extends AsyncNotifier<MailboxMessagesState> {
           folder: folder,
           messageIds: messageIds,
         );
-    if (result.movedMessageIds.isNotEmpty) {
-      final movedIds = result.movedMessageIds.toSet();
-      state = AsyncData(
-        current.copyWith(
-          messages: current.messages
-              .where((message) => !movedIds.contains(message.id))
-              .toList(),
-        ),
-      );
-    }
+    removeMessagesFromState(result.movedMessageIds);
     return result;
   }
 
@@ -480,6 +448,99 @@ class MailboxMessagesController extends AsyncNotifier<MailboxMessagesState> {
 }
 
 const Object _unchanged = Object();
+
+class MailboxDeleteStateRemoval {
+  const MailboxDeleteStateRemoval._();
+
+  static List<MailMessageSummary> removeFromMessages(
+    List<MailMessageSummary> messages,
+    Set<String> messageIds,
+  ) {
+    if (messageIds.isEmpty) {
+      return messages;
+    }
+    return messages
+        .where((message) => !messageIds.contains(message.id))
+        .toList();
+  }
+
+  static MailThread? removeFromThread(
+    MailThread thread,
+    Set<String> messageIds,
+  ) {
+    if (messageIds.isEmpty) {
+      return thread;
+    }
+    final remainingMessages = thread.messages
+        .where((message) => !messageIds.contains(message.id))
+        .toList();
+    if (remainingMessages.isEmpty) {
+      return null;
+    }
+    final selectedMessageId =
+        remainingMessages.any(
+          (message) => message.id == thread.selectedMessageId,
+        )
+        ? thread.selectedMessageId
+        : remainingMessages.first.id;
+    return MailThread(
+      subject: thread.subject,
+      selectedMessageId: selectedMessageId,
+      messages: remainingMessages,
+    );
+  }
+
+  static List<MailConversation> removeFromConversations(
+    List<MailConversation> conversations,
+    Set<String> messageIds,
+  ) {
+    if (messageIds.isEmpty) {
+      return conversations;
+    }
+    return conversations
+        .map((conversation) {
+          final remainingTimeline = conversation.messages
+              .where((message) => !messageIds.contains(message.message.id))
+              .toList();
+          if (remainingTimeline.isEmpty) {
+            return null;
+          }
+          final newRoot = remainingTimeline.first.message;
+          final newReplies = remainingTimeline
+              .skip(1)
+              .map((message) => message.message)
+              .toList();
+          return MailConversation(
+            id: conversation.id,
+            messageCount: remainingTimeline.length,
+            replyCount: newReplies.length,
+            hasUnread:
+                !newRoot.isRead || newReplies.any((reply) => !reply.isRead),
+            hasAttachments:
+                newRoot.hasAttachments ||
+                newReplies.any((reply) => reply.hasAttachments),
+            hasVisibleAttachments:
+                newRoot.hasAttachments ||
+                newReplies.any((reply) => reply.hasAttachments),
+            participants: conversation.participants,
+            rootMessage: newRoot,
+            replies: newReplies,
+            latestDate: newReplies.isEmpty
+                ? newRoot.receivedAt
+                : newReplies
+                      .map((reply) => reply.receivedAt)
+                      .fold(newRoot.receivedAt, _latestDate),
+            timelineMessages: remainingTimeline,
+          );
+        })
+        .whereType<MailConversation>()
+        .toList();
+  }
+
+  static DateTime _latestDate(DateTime left, DateTime right) {
+    return right.isAfter(left) ? right : left;
+  }
+}
 
 final mailboxSearchProvider = FutureProvider.autoDispose
     .family<List<MailMessageSummary>, MailboxSearchRequest>((

@@ -32,6 +32,7 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
   String? _selectedFolderId;
   String _searchQuery = '';
   final _selectedMessageIds = <String>{};
+  final _locallyRemovedMessageIds = <String>{};
   final _expandedFolderPaths = <String>{};
   bool _isProcessingSelection = false;
 
@@ -94,6 +95,11 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
       final failedIds = result.failed
           .map((failure) => failure.messageId)
           .toSet();
+      _removeDeletedMessagesFromVisibleMailbox(
+        folder,
+        result.movedMessageIds,
+        failedIds: failedIds,
+      );
       setState(() {
         _selectedMessageIds
           ..clear()
@@ -252,7 +258,13 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
                       folder: selectedFolder,
                       searchQuery: _searchQuery,
                       selectedMessageIds: _selectedMessageIds,
+                      locallyRemovedMessageIds: _locallyRemovedMessageIds,
                       onToggleSelected: _toggleSelectedMessage,
+                      onDeletedMessages: (messageIds) =>
+                          _removeDeletedMessagesFromVisibleMailbox(
+                            selectedFolder,
+                            messageIds,
+                          ),
                     ),
             ),
           ],
@@ -287,6 +299,48 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
         _expandedFolderPaths.remove(path);
       }
     });
+  }
+
+  void _removeDeletedMessagesFromVisibleMailbox(
+    MailFolder folder,
+    Iterable<String> messageIds, {
+    Set<String> failedIds = const {},
+  }) {
+    final deletedIds = messageIds
+        .where((messageId) => !failedIds.contains(messageId))
+        .toSet();
+    if (deletedIds.isEmpty) {
+      return;
+    }
+
+    ref
+        .read(mailboxConversationsControllerProvider(folder).notifier)
+        .removeMessagesFromState(deletedIds);
+    ref
+        .read(mailboxMessagesControllerProvider(folder).notifier)
+        .removeMessagesFromState(deletedIds);
+
+    setState(() {
+      _locallyRemovedMessageIds.addAll(deletedIds);
+      _selectedMessageIds.removeAll(deletedIds);
+    });
+
+    unawaited(
+      Future<void>.microtask(() {
+        if (!mounted) {
+          return;
+        }
+        ref.invalidate(mailboxConversationsControllerProvider(folder));
+        ref.invalidate(mailboxMessagesControllerProvider(folder));
+        if (_searchQuery.isNotEmpty) {
+          ref.invalidate(
+            mailboxSearchProvider(
+              MailboxSearchRequest(folder: folder, query: _searchQuery),
+            ),
+          );
+        }
+      }),
+    );
   }
 }
 
@@ -801,13 +855,17 @@ class _MailboxContent extends ConsumerStatefulWidget {
     required this.folder,
     required this.searchQuery,
     required this.selectedMessageIds,
+    required this.locallyRemovedMessageIds,
     required this.onToggleSelected,
+    required this.onDeletedMessages,
   });
 
   final MailFolder folder;
   final String searchQuery;
   final Set<String> selectedMessageIds;
+  final Set<String> locallyRemovedMessageIds;
   final ValueChanged<String> onToggleSelected;
+  final ValueChanged<Set<String>> onDeletedMessages;
 
   @override
   ConsumerState<_MailboxContent> createState() => _MailboxContentState();
@@ -892,7 +950,11 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
           (isSearching ? searchAsync! : conversationsAsync!).when(
             data: (data) {
               if (isSearching) {
-                final visibleMessages = data as List<MailMessageSummary>;
+                final visibleMessages =
+                    MailboxDeleteStateRemoval.removeFromMessages(
+                      data as List<MailMessageSummary>,
+                      widget.locallyRemovedMessageIds,
+                    );
                 if (visibleMessages.isEmpty) {
                   return EmptyStateView(
                     title: 'No matching mail',
@@ -905,11 +967,15 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
                   selectedMessageIds: widget.selectedMessageIds,
                   selectionEnabled: false,
                   onToggleSelected: widget.onToggleSelected,
+                  onDeletedMessages: widget.onDeletedMessages,
                 );
               }
 
               final conversations =
-                  (data as MailboxConversationsState).conversations;
+                  MailboxDeleteStateRemoval.removeFromConversations(
+                    (data as MailboxConversationsState).conversations,
+                    widget.locallyRemovedMessageIds,
+                  );
               if (conversations.isEmpty) {
                 return EmptyStateView(
                   title: 'No messages yet',
@@ -923,6 +989,7 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
                 folder: folder,
                 selectedMessageIds: widget.selectedMessageIds,
                 onToggleSelected: widget.onToggleSelected,
+                onDeletedMessages: widget.onDeletedMessages,
                 isConversationCollapsed: _isConversationCollapsed,
                 onToggleConversationExpanded: _toggleConversationExpanded,
               );
@@ -949,6 +1016,7 @@ class _ConversationList extends ConsumerWidget {
     required this.folder,
     required this.selectedMessageIds,
     required this.onToggleSelected,
+    required this.onDeletedMessages,
     required this.isConversationCollapsed,
     required this.onToggleConversationExpanded,
   });
@@ -957,6 +1025,7 @@ class _ConversationList extends ConsumerWidget {
   final MailFolder folder;
   final Set<String> selectedMessageIds;
   final ValueChanged<String> onToggleSelected;
+  final ValueChanged<Set<String>> onDeletedMessages;
   final bool Function(MailConversation conversation) isConversationCollapsed;
   final ValueChanged<String> onToggleConversationExpanded;
 
@@ -976,6 +1045,7 @@ class _ConversationList extends ConsumerWidget {
               onToggleCollapsed: () =>
                   onToggleConversationExpanded(conversation.id),
               onToggleSelected: onToggleSelected,
+              onDeletedMessages: onDeletedMessages,
               onShowActions: _showMessageActions,
             ),
           ),
@@ -1005,6 +1075,7 @@ class _MessageList extends ConsumerWidget {
     required this.selectedMessageIds,
     required this.selectionEnabled,
     required this.onToggleSelected,
+    required this.onDeletedMessages,
   });
 
   final List<MailMessageSummary> messages;
@@ -1012,6 +1083,7 @@ class _MessageList extends ConsumerWidget {
   final Set<String> selectedMessageIds;
   final bool selectionEnabled;
   final ValueChanged<String> onToggleSelected;
+  final ValueChanged<Set<String>> onDeletedMessages;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1035,6 +1107,7 @@ class _MessageList extends ConsumerWidget {
               selectionEnabled: selectionEnabled,
               selectionActive: selectionActive,
               onToggleSelected: onToggleSelected,
+              onDeletedMessages: onDeletedMessages,
               onShowActions: _showMessageActions,
             ),
           ),

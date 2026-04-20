@@ -566,7 +566,7 @@ void main() {
   });
 
   testWidgets(
-    'delete moves selected detail message to trash and navigates back',
+    'top delete removes selected detail message and stays when thread remains',
     (tester) async {
       final repository = _FakeMailboxRepository();
       await tester.pumpWidget(_buildTestApp(repository: repository));
@@ -576,7 +576,119 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(repository.deletedMessageIds, [_secondMessage.id]);
-      expect(find.text('Inbox route reached'), findsOneWidget);
+      expect(find.text('Inbox route reached'), findsNothing);
+      expect(find.text(_secondMessage.visibleBody), findsNothing);
+      expect(find.text(_firstMessage.visibleBody), findsOneWidget);
+    },
+  );
+
+  testWidgets('top delete closes detail when thread becomes empty', (
+    tester,
+  ) async {
+    final repository = _FakeMailboxRepository(
+      thread: MailThread(
+        subject: _firstMessage.subject,
+        selectedMessageId: _firstMessage.id,
+        messages: [_firstMessage],
+      ),
+    );
+    await tester.pumpWidget(
+      _buildTestApp(repository: repository, initialMessageId: _firstMessage.id),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Delete'));
+    await tester.pumpAndSettle();
+
+    expect(repository.deletedMessageIds, [_firstMessage.id]);
+    expect(find.text('Inbox route reached'), findsOneWidget);
+  });
+
+  testWidgets('per-message menu shows coming soon actions without applying', (
+    tester,
+  ) async {
+    final repository = _FakeMailboxRepository();
+    await tester.pumpWidget(_buildTestApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Message options').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reply (Coming soon)'), findsOneWidget);
+    expect(find.text('Forward (Coming soon)'), findsOneWidget);
+    expect(find.text('Archive (Coming soon)'), findsOneWidget);
+    expect(find.text('Mark unread (Coming soon)'), findsOneWidget);
+    expect(find.text('Move (Coming soon)'), findsOneWidget);
+    expect(find.text('Move to Trash'), findsOneWidget);
+
+    await tester.tap(find.text('Reply (Coming soon)'));
+    await tester.pumpAndSettle();
+
+    expect(repository.deletedMessageIds, isEmpty);
+    expect(find.text('Reply (Coming soon)'), findsOneWidget);
+  });
+
+  testWidgets(
+    'per-message delete removes only tapped thread message and stays open',
+    (tester) async {
+      final repository = _FakeMailboxRepository();
+      await tester.pumpWidget(_buildTestApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Message options').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Move to Trash'));
+      await tester.pumpAndSettle();
+
+      expect(repository.deletedMessageIds, [_firstMessage.id]);
+      expect(find.text('Inbox route reached'), findsNothing);
+      expect(find.text(_firstMessage.visibleBody), findsNothing);
+      expect(find.text(_secondMessage.visibleBody), findsOneWidget);
+    },
+  );
+
+  testWidgets('per-message delete closes detail when no messages remain', (
+    tester,
+  ) async {
+    final repository = _FakeMailboxRepository(
+      thread: MailThread(
+        subject: _firstMessage.subject,
+        selectedMessageId: _firstMessage.id,
+        messages: [_firstMessage],
+      ),
+    );
+    await tester.pumpWidget(
+      _buildTestApp(repository: repository, initialMessageId: _firstMessage.id),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Message options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Move to Trash'));
+    await tester.pumpAndSettle();
+
+    expect(repository.deletedMessageIds, [_firstMessage.id]);
+    expect(find.text('Inbox route reached'), findsOneWidget);
+  });
+
+  testWidgets(
+    'per-message delete failure keeps detail message visible and open',
+    (tester) async {
+      final repository = _FakeMailboxRepository(
+        failingDeleteIds: {_firstMessage.id},
+      );
+      await tester.pumpWidget(_buildTestApp(repository: repository));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Message options').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Move to Trash'));
+      await tester.pumpAndSettle();
+
+      expect(repository.deletedMessageIds, [_firstMessage.id]);
+      expect(find.text('Inbox route reached'), findsNothing);
+      expect(find.text(_firstMessage.visibleBody), findsOneWidget);
+      expect(find.text('Move to Trash failed for test.'), findsOneWidget);
     },
   );
 
@@ -753,10 +865,14 @@ final _trashThread = MailThread(
 );
 
 class _FakeMailboxRepository implements MailboxRepository {
-  _FakeMailboxRepository({MailThread? thread})
-    : _currentThread = thread ?? _thread;
+  _FakeMailboxRepository({
+    MailThread? thread,
+    Set<String> failingDeleteIds = const {},
+  }) : _currentThread = thread ?? _thread,
+       _failingDeleteIds = failingDeleteIds;
 
   final MailThread _currentThread;
+  final Set<String> _failingDeleteIds;
   final markedReadMessageIds = <String>[];
   final deletedMessageIds = <String>[];
   final restoredMessageIds = <String>[];
@@ -828,7 +944,21 @@ class _FakeMailboxRepository implements MailboxRepository {
     required List<String> messageIds,
   }) async {
     deletedMessageIds.addAll(messageIds);
-    return MailDeleteResult(movedMessageIds: messageIds, failed: const []);
+    final movedIds = <String>[];
+    final failures = <MailDeleteFailure>[];
+    for (final messageId in messageIds) {
+      if (_failingDeleteIds.contains(messageId)) {
+        failures.add(
+          MailDeleteFailure(
+            messageId: messageId,
+            message: 'Move to Trash failed for test.',
+          ),
+        );
+      } else {
+        movedIds.add(messageId);
+      }
+    }
+    return MailDeleteResult(movedMessageIds: movedIds, failed: failures);
   }
 
   @override
@@ -837,6 +967,17 @@ class _FakeMailboxRepository implements MailboxRepository {
     required String messageId,
   }) async {
     deletedMessageIds.add(messageId);
+    if (_failingDeleteIds.contains(messageId)) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: [
+          MailDeleteFailure(
+            messageId: messageId,
+            message: 'Move to Trash failed for test.',
+          ),
+        ],
+      );
+    }
     return MailDeleteResult(movedMessageIds: [messageId], failed: const []);
   }
 

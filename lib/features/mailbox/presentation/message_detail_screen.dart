@@ -16,11 +16,12 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
 import '../../../core/widgets/state_views.dart';
-import '../../compose/domain/entities/reply_context.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../compose/domain/entities/reply_context.dart';
 import '../domain/entities/mail_message_attachment.dart';
 import '../domain/entities/mail_thread.dart';
 import 'mailbox_controller.dart';
+import 'message_detail_route_result.dart';
 
 const _screenBackground = Color(0xFFF7F8FC);
 const _mutedText = Color(0xFF5D636B);
@@ -46,6 +47,8 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   final _visibleQuotedMessageIds = <String>{};
   final _markedReadMessageIds = <String>{};
   final _downloadingAttachmentIds = <String>{};
+  final _locallyRemovedMessageIds = <String>{};
+  final _deletedMessageIdsForRoute = <String>{};
   String? _initializedThreadMessageId;
   bool _isProcessingMessage = false;
 
@@ -61,23 +64,46 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
             Expanded(
               child: threadAsync.when(
                 data: (thread) {
-                  _ensureDefaultExpansion(thread);
-                  _markSelectedMessageRead(thread);
+                  final visibleThread =
+                      MailboxDeleteStateRemoval.removeFromThread(
+                        thread,
+                        _locallyRemovedMessageIds,
+                      );
+                  if (visibleThread == null) {
+                    return Column(
+                      children: [
+                        _MessageTopBar(
+                          isProcessing: _isProcessingMessage,
+                          mode: _MessageTopBarMode.disabled,
+                          onBack: _navigateBack,
+                          onAction: () {},
+                        ),
+                        const Expanded(
+                          child: EmptyStateView(
+                            title: 'No messages to show',
+                            message: 'This conversation has no visible mail.',
+                          ),
+                        ),
+                      ],
+                    );
+                  }
+                  _ensureDefaultExpansion(visibleThread);
+                  _markSelectedMessageRead(visibleThread);
                   return Column(
                     children: [
                       _MessageTopBar(
                         isProcessing: _isProcessingMessage,
-                        mode: _selectedMessageIsTrash(thread)
+                        mode: _selectedMessageIsTrash(visibleThread)
                             ? _MessageTopBarMode.restore
                             : _MessageTopBarMode.delete,
                         onBack: _navigateBack,
-                        onAction: () => _selectedMessageIsTrash(thread)
-                            ? _restoreSelectedMessageToInbox(thread)
-                            : _moveSelectedMessageToTrash(thread),
+                        onAction: () => _selectedMessageIsTrash(visibleThread)
+                            ? _restoreSelectedMessageToInbox(visibleThread)
+                            : _moveSelectedMessageToTrash(visibleThread),
                       ),
                       Expanded(
                         child: _MessageThreadContent(
-                          thread: thread,
+                          thread: visibleThread,
                           outerScrollController: _outerScrollController,
                           expandedMessageIds: _expandedMessageIds,
                           visibleQuotedMessageIds: _visibleQuotedMessageIds,
@@ -92,10 +118,12 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                           ),
                           onForward: (message) => _openCompose(
                             context: context,
-                            thread: thread,
+                            thread: visibleThread,
                             message: message,
                             action: ReplyAction.forward,
                           ),
+                          onDeleteMessage: (message) =>
+                              _moveMessageToTrash(visibleThread, message.id),
                           downloadingAttachmentIds: _downloadingAttachmentIds,
                           onDownloadAttachment: _downloadAttachment,
                         ),
@@ -143,14 +171,24 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
 
   void _navigateBack() {
     if (context.canPop()) {
-      context.pop();
+      context.pop(
+        _deletedMessageIdsForRoute.isEmpty
+            ? null
+            : MessageDetailRouteResult.deleted(
+                Set.unmodifiable(_deletedMessageIdsForRoute),
+              ),
+      );
     } else {
       context.go(AppRoute.inbox.path);
     }
   }
 
   Future<void> _moveSelectedMessageToTrash(MailThread thread) async {
-    if (_isProcessingMessage || _selectedMessageIsTrash(thread)) {
+    await _moveMessageToTrash(thread, thread.selectedMessageId);
+  }
+
+  Future<void> _moveMessageToTrash(MailThread thread, String messageId) async {
+    if (_isProcessingMessage || _messageIsTrash(thread, messageId)) {
       return;
     }
     final account = await ref.read(activeAccountProvider.future);
@@ -162,19 +200,30 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
     try {
       final result = await ref
           .read(mailboxRepositoryProvider)
-          .moveMessageToTrash(
-            accountId: account.id,
-            messageId: thread.selectedMessageId,
-          );
+          .moveMessageToTrash(accountId: account.id, messageId: messageId);
       if (!mounted) {
         return;
       }
       if (result.movedAny) {
+        final movedIds = result.movedMessageIds.toSet();
+        final remainingThread = MailboxDeleteStateRemoval.removeFromThread(
+          thread,
+          movedIds,
+        );
+        setState(() {
+          _locallyRemovedMessageIds.addAll(movedIds);
+          _deletedMessageIdsForRoute.addAll(movedIds);
+          _expandedMessageIds.removeAll(movedIds);
+          _visibleQuotedMessageIds.removeAll(movedIds);
+        });
         ref.invalidate(mailboxMessagesControllerProvider);
+        ref.invalidate(mailboxConversationsControllerProvider);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Moved message to Trash.')),
         );
-        _navigateBack();
+        if (remainingThread == null) {
+          _navigateBack();
+        }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -238,9 +287,13 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   }
 
   bool _selectedMessageIsTrash(MailThread thread) {
+    return _messageIsTrash(thread, thread.selectedMessageId);
+  }
+
+  bool _messageIsTrash(MailThread thread, String messageId) {
     MailThreadMessage? selected;
     for (final message in thread.messages) {
-      if (message.id == thread.selectedMessageId) {
+      if (message.id == messageId) {
         selected = message;
         break;
       }
@@ -498,6 +551,7 @@ class _MessageThreadContent extends StatelessWidget {
     required this.onToggleQuoted,
     required this.onReply,
     required this.onForward,
+    required this.onDeleteMessage,
     required this.downloadingAttachmentIds,
     required this.onDownloadAttachment,
   });
@@ -511,6 +565,7 @@ class _MessageThreadContent extends StatelessWidget {
   final ValueChanged<String> onToggleQuoted;
   final ValueChanged<MailThreadMessage> onReply;
   final ValueChanged<MailThreadMessage> onForward;
+  final ValueChanged<MailThreadMessage> onDeleteMessage;
   final Set<String> downloadingAttachmentIds;
   final void Function(MailThreadMessage, MailMessageAttachment)
   onDownloadAttachment;
@@ -544,6 +599,7 @@ class _MessageThreadContent extends StatelessWidget {
               emailHtmlViewBuilder: emailHtmlViewBuilder,
               onReply: () => onReply(message),
               onForward: () => onForward(message),
+              onDeleteMessage: () => onDeleteMessage(message),
               downloadingAttachmentIds: downloadingAttachmentIds,
               onDownloadAttachment: onDownloadAttachment,
             ),
@@ -625,6 +681,7 @@ class _ThreadMessageCard extends StatelessWidget {
     required this.onToggleQuoted,
     required this.onReply,
     required this.onForward,
+    required this.onDeleteMessage,
     required this.downloadingAttachmentIds,
     required this.onDownloadAttachment,
   });
@@ -638,6 +695,7 @@ class _ThreadMessageCard extends StatelessWidget {
   final VoidCallback onToggleQuoted;
   final VoidCallback onReply;
   final VoidCallback onForward;
+  final VoidCallback onDeleteMessage;
   final Set<String> downloadingAttachmentIds;
   final void Function(MailThreadMessage, MailMessageAttachment)
   onDownloadAttachment;
@@ -719,7 +777,8 @@ class _ThreadMessageCard extends StatelessWidget {
                 ),
                 IconButton(
                   tooltip: 'Message options',
-                  onPressed: () {},
+                  onPressed: () =>
+                      _showThreadMessageMenu(context, onDeleteMessage),
                   icon: const Icon(Icons.more_vert, color: _mutedText),
                 ),
               ],
@@ -775,6 +834,52 @@ class _ThreadMessageCard extends StatelessWidget {
     );
   }
 
+  Future<void> _showThreadMessageMenu(
+    BuildContext context,
+    VoidCallback onDeleteMessage,
+  ) async {
+    final action = await showModalBottomSheet<_ThreadMessageAction>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ComingSoonActionTile(icon: Icons.reply, label: 'Reply'),
+                _ComingSoonActionTile(icon: Icons.forward, label: 'Forward'),
+                _ComingSoonActionTile(
+                  icon: Icons.archive_outlined,
+                  label: 'Archive',
+                ),
+                _ComingSoonActionTile(
+                  icon: Icons.mark_email_unread_outlined,
+                  label: 'Mark unread',
+                ),
+                _ComingSoonActionTile(
+                  icon: Icons.drive_file_move_outlined,
+                  label: 'Move',
+                ),
+                ListTile(
+                  leading: const Icon(Icons.delete_outline),
+                  title: const Text('Move to Trash'),
+                  onTap: () => Navigator.of(
+                    sheetContext,
+                  ).pop(_ThreadMessageAction.delete),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (action == _ThreadMessageAction.delete) {
+      onDeleteMessage();
+    }
+  }
+
   String _senderLabel(String sender) {
     final localPart = sender.split('@').first.trim();
     if (localPart.isEmpty) {
@@ -788,6 +893,24 @@ class _ThreadMessageCard extends StatelessWidget {
               '${part.characters.first.toUpperCase()}${part.substring(1)}',
         )
         .join(' ');
+  }
+}
+
+enum _ThreadMessageAction { delete }
+
+class _ComingSoonActionTile extends StatelessWidget {
+  const _ComingSoonActionTile({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      enabled: false,
+      leading: Icon(icon),
+      title: Text('$label (Coming soon)'),
+    );
   }
 }
 

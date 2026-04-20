@@ -14,6 +14,7 @@ import 'package:finestar_mail/features/mailbox/domain/entities/mail_restore_resu
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_thread.dart';
 import 'package:finestar_mail/features/mailbox/domain/repositories/mailbox_repository.dart';
 import 'package:finestar_mail/features/mailbox/presentation/mailbox_controller.dart';
+import 'package:finestar_mail/features/mailbox/presentation/message_detail_route_result.dart';
 import 'package:finestar_mail/features/mailbox/presentation/mailbox_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -298,6 +299,60 @@ void main() {
     expect(find.text('detail:reply-1'), findsOneWidget);
   });
 
+  testWidgets(
+    'detail delete result removes single-message conversation from mailbox',
+    (tester) async {
+      await tester.pumpWidget(
+        _buildTestApp(
+          detailDeletedIds: {'app-test-2@finestar.hr:inbox:imap:2'},
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Pinned important'), findsOneWidget);
+
+      await tester.tap(find.text('Pinned important'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('return-deleted-from-detail')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Pinned important'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'detail delete result removes only deleted row from conversation',
+    (tester) async {
+      await tester.pumpWidget(
+        _buildTestApp(
+          repository: _FakeMailboxRepository(
+            threadedConversations: [_threadedConversation],
+          ),
+          detailDeletedIds: {_threadReplyTwo.id},
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Thread root'), findsOneWidget);
+      expect(find.text('Thread reply one'), findsOneWidget);
+      expect(find.text('Thread reply two'), findsOneWidget);
+
+      await tester.tap(find.text('Thread reply two'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('return-deleted-from-detail')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Thread root'), findsOneWidget);
+      expect(find.text('Thread reply one'), findsOneWidget);
+      expect(find.text('Thread reply two'), findsNothing);
+      expect(find.text('1 replies'), findsOneWidget);
+    },
+  );
+
   testWidgets('unified conversation renders outbound row and opens exact row', (
     tester,
   ) async {
@@ -345,6 +400,31 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(repository.deletedMessageIds, ['reply-2']);
+    expect(find.text('Thread root'), findsOneWidget);
+    expect(find.text('Thread reply one'), findsOneWidget);
+    expect(find.text('Thread reply two'), findsNothing);
+  });
+
+  testWidgets('detail delete result filters visible search result', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildTestApp(detailDeletedIds: {'app-test-2@finestar.hr:inbox:imap:2'}),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'Pinned');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+    expect(find.text('Pinned important'), findsOneWidget);
+
+    await tester.tap(find.text('Pinned important'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('return-deleted-from-detail')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pinned important'), findsNothing);
+    expect(find.text('No matching mail'), findsOneWidget);
   });
 
   testWidgets('avatar opens account management route', (tester) async {
@@ -488,7 +568,10 @@ void main() {
   });
 }
 
-Widget _buildTestApp({_FakeMailboxRepository? repository}) {
+Widget _buildTestApp({
+  _FakeMailboxRepository? repository,
+  Set<String>? detailDeletedIds,
+}) {
   final router = GoRouter(
     initialLocation: AppRoute.inbox.path,
     routes: [
@@ -504,7 +587,22 @@ Widget _buildTestApp({_FakeMailboxRepository? repository}) {
       GoRoute(
         path: AppRoute.messageDetail.path,
         builder: (context, state) => Scaffold(
-          body: Center(child: Text('detail:${state.pathParameters['id']}')),
+          body: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('detail:${state.pathParameters['id']}'),
+                if (detailDeletedIds != null)
+                  ElevatedButton(
+                    key: const ValueKey('return-deleted-from-detail'),
+                    onPressed: () => context.pop(
+                      MessageDetailRouteResult.deleted(detailDeletedIds),
+                    ),
+                    child: const Text('Return deleted'),
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
     ],
