@@ -463,6 +463,81 @@ void main() {
     expect(response.accounts.single.importantCount, 3);
   });
 
+  test('contactSuggestions sends query limit and parses contacts', () async {
+    http.Request? capturedRequest;
+    final client = BackendMailApiClient(
+      httpClient: MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(
+          jsonEncode({
+            'contacts': [
+              {
+                'id': 7,
+                'email': 'client@example.test',
+                'display_name': 'Client Name',
+                'source': 'manual',
+                'times_contacted': 4,
+                'last_used_at': '2026-04-22T20:30:00Z',
+                'created_at': '2026-04-20T08:00:00Z',
+                'updated_at': '2026-04-22T20:30:00Z',
+              },
+              {
+                'id': 8,
+                'email': 'plain@example.test',
+                'display_name': null,
+                'source': 'auto',
+                'times_contacted': 1,
+                'last_used_at': null,
+                'created_at': '2026-04-21T08:00:00Z',
+                'updated_at': '2026-04-21T08:00:00Z',
+              },
+            ],
+          }),
+          200,
+        );
+      }),
+      baseUrlLoader: () async => 'https://mail.example.test',
+    );
+
+    final response = await client.contactSuggestions(
+      token: 'session-token',
+      query: ' cli ',
+      limit: 10,
+    );
+
+    expect(capturedRequest?.method, 'GET');
+    expect(capturedRequest?.url.path, '/api/contacts/suggest');
+    expect(capturedRequest?.url.queryParameters, {'q': 'cli', 'limit': '10'});
+    expect(capturedRequest?.headers['Authorization'], 'Token session-token');
+    expect(response.contacts.first.id, 7);
+    expect(response.contacts.first.email, 'client@example.test');
+    expect(response.contacts.first.displayName, 'Client Name');
+    expect(response.contacts.first.source, 'manual');
+    expect(response.contacts.first.timesContacted, 4);
+    expect(
+      response.contacts.first.lastUsedAt,
+      DateTime.parse('2026-04-22T20:30:00Z'),
+    );
+    expect(response.contacts.last.displayName, isNull);
+    expect(response.contacts.last.lastUsedAt, isNull);
+  });
+
+  test('contactSuggestions parses empty response', () async {
+    final client = BackendMailApiClient(
+      httpClient: MockClient((request) async {
+        return http.Response(jsonEncode({'contacts': []}), 200);
+      }),
+      baseUrlLoader: () async => 'https://mail.example.test',
+    );
+
+    final response = await client.contactSuggestions(
+      token: 'session-token',
+      query: 'missing',
+    );
+
+    expect(response.contacts, isEmpty);
+  });
+
   test('message detail parses attachment metadata', () async {
     final client = BackendMailApiClient(
       httpClient: MockClient((request) async {

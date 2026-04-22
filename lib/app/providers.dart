@@ -13,6 +13,8 @@ import '../features/attachments/domain/repositories/attachment_repository.dart';
 import '../features/auth/data/backend_auth_token_selector.dart';
 import '../features/auth/data/auth_repository_impl.dart';
 import '../features/auth/domain/repositories/auth_repository.dart';
+import '../features/contacts/data/contacts_repository_impl.dart';
+import '../features/contacts/domain/repositories/contacts_repository.dart';
 import '../features/compose/data/compose_repository_impl.dart';
 import '../features/compose/domain/repositories/compose_repository.dart';
 import '../features/mailbox/data/mailbox_repository_impl.dart';
@@ -61,6 +63,14 @@ final composeRepositoryProvider = Provider<ComposeRepository>((ref) {
     logger: ref.watch(loggerProvider),
     secureStorageService: ref.watch(secureStorageServiceProvider),
     backendMailApiClient: ref.watch(backendMailApiClientProvider),
+  );
+});
+
+final contactsRepositoryProvider = Provider<ContactsRepository>((ref) {
+  return ContactsRepositoryImpl(
+    backendMailApiClient: ref.watch(backendMailApiClientProvider),
+    backendAuthTokenSelector: ref.watch(backendAuthTokenSelectorProvider),
+    logger: ref.watch(loggerProvider),
   );
 });
 
