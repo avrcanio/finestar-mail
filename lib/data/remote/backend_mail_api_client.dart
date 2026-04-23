@@ -53,6 +53,20 @@ class BackendMailApiClient {
     return BackendAccountSummariesResponse.fromJson(json);
   }
 
+  Future<BackendContactSuggestionsResponse> contactSuggestions({
+    required String token,
+    required String query,
+    int limit = 20,
+  }) async {
+    final json = await _requestJson(
+      method: 'GET',
+      path: '/api/contacts/suggest',
+      queryParameters: {'q': query.trim(), 'limit': '$limit'},
+      token: token,
+    );
+    return BackendContactSuggestionsResponse.fromJson(json);
+  }
+
   Future<BackendFoldersResponse> folders({required String token}) async {
     final json = await _requestJson(
       method: 'GET',
@@ -553,6 +567,59 @@ class BackendAccountSummaryDto {
   }
 }
 
+class BackendContactSuggestionsResponse {
+  const BackendContactSuggestionsResponse({required this.contacts});
+
+  final List<BackendContactDto> contacts;
+
+  factory BackendContactSuggestionsResponse.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return BackendContactSuggestionsResponse(
+      contacts: _listOfObjects(
+        json['contacts'],
+      ).map(BackendContactDto.fromJson).toList(),
+    );
+  }
+}
+
+class BackendContactDto {
+  const BackendContactDto({
+    required this.id,
+    required this.email,
+    required this.displayName,
+    required this.source,
+    required this.timesContacted,
+    required this.lastUsedAt,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final int id;
+  final String email;
+  final String? displayName;
+  final String source;
+  final int timesContacted;
+  final DateTime? lastUsedAt;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  factory BackendContactDto.fromJson(Map<String, dynamic> json) {
+    return BackendContactDto(
+      id: json['id'] is num ? (json['id'] as num).toInt() : 0,
+      email: json['email'] as String? ?? '',
+      displayName: json['display_name'] as String?,
+      source: json['source'] as String? ?? '',
+      timesContacted: json['times_contacted'] is num
+          ? (json['times_contacted'] as num).toInt()
+          : 0,
+      lastUsedAt: _dateTime(json['last_used_at']),
+      createdAt: _dateTime(json['created_at']),
+      updatedAt: _dateTime(json['updated_at']),
+    );
+  }
+}
+
 class BackendFoldersResponse {
   const BackendFoldersResponse({
     required this.accountEmail,
@@ -735,9 +802,9 @@ class BackendUnifiedConversationsResponse {
   ) {
     return BackendUnifiedConversationsResponse(
       accountEmail: json['account_email'] as String? ?? '',
-      folders: _listOfObjects(json['folders'])
-          .map(BackendFolderDto.fromJson)
-          .toList(),
+      folders: _listOfObjects(
+        json['folders'],
+      ).map(BackendFolderDto.fromJson).toList(),
       conversations: _listOfObjects(
         json['conversations'],
       ).map(BackendUnifiedConversationDto.fromJson).toList(),
