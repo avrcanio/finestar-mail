@@ -5,6 +5,8 @@ import 'package:finestar_mail/features/attachments/domain/repositories/attachmen
 import 'package:finestar_mail/features/auth/domain/entities/connection_settings.dart';
 import 'package:finestar_mail/features/auth/domain/entities/mail_account.dart';
 import 'package:finestar_mail/features/auth/presentation/auth_controller.dart';
+import 'package:finestar_mail/features/contacts/domain/entities/contact_suggestion.dart';
+import 'package:finestar_mail/features/contacts/domain/repositories/contacts_repository.dart';
 import 'package:finestar_mail/features/compose/domain/entities/outgoing_message.dart';
 import 'package:finestar_mail/features/compose/domain/entities/reply_context.dart';
 import 'package:finestar_mail/features/compose/domain/repositories/compose_repository.dart';
@@ -91,6 +93,109 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  testWidgets('recipient autocomplete inserts display name address and comma', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildTestApp(contactsRepository: _FakeContactsRepository()),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('compose-to-field')),
+      'cli',
+    );
+    await _pumpAutocomplete(tester);
+
+    expect(find.text('Client Name'), findsOneWidget);
+    expect(find.text('client@example.test'), findsOneWidget);
+
+    await tester.tap(find.text('Client Name'));
+    await tester.pumpAndSettle();
+
+    final field = tester.widget<TextField>(
+      find.byKey(const ValueKey('compose-to-field')),
+    );
+    expect(field.controller?.text, 'Client Name <client@example.test>, ');
+    expect(find.text('Client Name'), findsNothing);
+  });
+
+  testWidgets(
+    'recipient autocomplete closes when query drops below threshold',
+    (tester) async {
+      await tester.pumpWidget(
+        _buildTestApp(contactsRepository: _FakeContactsRepository()),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const ValueKey('compose-to-field')),
+        'cli',
+      );
+      await _pumpAutocomplete(tester);
+      expect(find.text('Client Name'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('compose-to-field')),
+        'cl',
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Client Name'), findsNothing);
+    },
+  );
+
+  testWidgets('recipient autocomplete replaces only the active segment', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildTestApp(contactsRepository: _FakeContactsRepository()),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('compose-to-field')),
+      'ana@test.com, cli',
+    );
+    await _pumpAutocomplete(tester);
+    await tester.tap(find.text('Client Name'));
+    await tester.pumpAndSettle();
+
+    final field = tester.widget<TextField>(
+      find.byKey(const ValueKey('compose-to-field')),
+    );
+    expect(
+      field.controller?.text,
+      'ana@test.com, Client Name <client@example.test>, ',
+    );
+  });
+
+  testWidgets('recipient autocomplete is available for cc field', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildTestApp(contactsRepository: _FakeContactsRepository()),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Show Cc and Bcc'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('compose-cc-field')),
+      'pla',
+    );
+    await _pumpAutocomplete(tester);
+
+    expect(find.text('plain@example.test'), findsOneWidget);
+    await tester.tap(find.text('plain@example.test'));
+    await tester.pumpAndSettle();
+
+    final field = tester.widget<TextField>(
+      find.byKey(const ValueKey('compose-cc-field')),
+    );
+    expect(field.controller?.text, 'plain@example.test, ');
   });
 
   test('compose controller adds, removes, and sends attachments', () async {
@@ -203,6 +308,7 @@ void main() {
 Widget _buildTestApp({
   ReplyContext? replyContext,
   _FakeComposeRepository? composeRepository,
+  ContactsRepository? contactsRepository,
 }) {
   return ProviderScope(
     overrides: [
@@ -210,12 +316,20 @@ Widget _buildTestApp({
       attachmentRepositoryProvider.overrideWith(
         (ref) => _FakeAttachmentRepository(),
       ),
+      contactsRepositoryProvider.overrideWith(
+        (ref) => contactsRepository ?? _FakeContactsRepository.empty(),
+      ),
       composeRepositoryProvider.overrideWith(
         (ref) => composeRepository ?? _FakeComposeRepository(),
       ),
     ],
     child: MaterialApp(home: ComposeScreen(replyContext: replyContext)),
   );
+}
+
+Future<void> _pumpAutocomplete(WidgetTester tester) async {
+  await tester.pump(const Duration(milliseconds: 350));
+  await tester.pumpAndSettle();
 }
 
 final _account = MailAccount(
@@ -320,5 +434,44 @@ class _FakeComposeRepository implements ComposeRepository {
   Future<Result<void>> send(OutgoingMessage message) async {
     lastMessage = message;
     return const Success(null);
+  }
+}
+
+class _FakeContactsRepository implements ContactsRepository {
+  _FakeContactsRepository()
+    : responses = const {
+        'cli': [
+          ContactSuggestion(
+            id: 7,
+            email: 'client@example.test',
+            displayName: 'Client Name',
+            source: 'manual',
+            timesContacted: 3,
+            lastUsedAt: null,
+            createdAt: null,
+            updatedAt: null,
+          ),
+        ],
+        'pla': [
+          ContactSuggestion(
+            id: 8,
+            email: 'plain@example.test',
+            displayName: null,
+            source: 'auto',
+            timesContacted: 1,
+            lastUsedAt: null,
+            createdAt: null,
+            updatedAt: null,
+          ),
+        ],
+      };
+
+  const _FakeContactsRepository.empty() : responses = const {};
+
+  final Map<String, List<ContactSuggestion>> responses;
+
+  @override
+  Future<List<ContactSuggestion>> suggestContacts(String query) async {
+    return responses[query.trim()] ?? const [];
   }
 }

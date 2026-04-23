@@ -1,13 +1,19 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../../app/providers.dart';
+import '../../contacts/domain/entities/contact_suggestion.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/entities/compose_attachment.dart';
 import '../domain/entities/reply_context.dart';
 import 'compose_controller.dart';
 
 enum _AttachmentAction { photos, camera, files, drive }
+
+enum _RecipientField { to, cc, bcc }
 
 enum _ComposeMoreAction {
   scheduleSend,
@@ -40,8 +46,15 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   final _bccController = TextEditingController();
   late final TextEditingController _subjectController;
   late final TextEditingController _bodyController;
+  final _toFocusNode = FocusNode();
+  final _ccFocusNode = FocusNode();
+  final _bccFocusNode = FocusNode();
 
   bool _showCcBcc = false;
+  Timer? _recipientSuggestionDebounce;
+  int _recipientSuggestionRequestId = 0;
+  _RecipientField? _suggestionField;
+  List<ContactSuggestion> _contactSuggestions = const [];
 
   @override
   void initState() {
@@ -70,15 +83,28 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             .setForwardedAttachments(widget.replyContext!.forwardedAttachments);
       });
     }
+    _toFocusNode.addListener(
+      () => _handleRecipientFocusChanged(_RecipientField.to),
+    );
+    _ccFocusNode.addListener(
+      () => _handleRecipientFocusChanged(_RecipientField.cc),
+    );
+    _bccFocusNode.addListener(
+      () => _handleRecipientFocusChanged(_RecipientField.bcc),
+    );
   }
 
   @override
   void dispose() {
+    _recipientSuggestionDebounce?.cancel();
     _toController.dispose();
     _ccController.dispose();
     _bccController.dispose();
     _subjectController.dispose();
     _bodyController.dispose();
+    _toFocusNode.dispose();
+    _ccFocusNode.dispose();
+    _bccFocusNode.dispose();
     super.dispose();
   }
 
@@ -144,6 +170,134 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         .toList();
   }
 
+  void _handleRecipientFocusChanged(_RecipientField field) {
+    if (_focusNodeFor(field).hasFocus) {
+      _scheduleRecipientSuggestions(field);
+      return;
+    }
+    if (_suggestionField == field) {
+      _hideRecipientSuggestions();
+    }
+  }
+
+  void _scheduleRecipientSuggestions(_RecipientField field) {
+    final focusNode = _focusNodeFor(field);
+    if (!focusNode.hasFocus) {
+      return;
+    }
+
+    final controller = _controllerFor(field);
+    final segment = _activeRecipientSegment(controller);
+    final query = segment.query;
+    _recipientSuggestionRequestId++;
+    _recipientSuggestionDebounce?.cancel();
+
+    if (query.length < 3) {
+      _hideRecipientSuggestions();
+      return;
+    }
+
+    final requestId = _recipientSuggestionRequestId;
+    _recipientSuggestionDebounce = Timer(const Duration(milliseconds: 300), () {
+      _loadRecipientSuggestions(
+        field: field,
+        query: query,
+        requestId: requestId,
+      );
+    });
+  }
+
+  Future<void> _loadRecipientSuggestions({
+    required _RecipientField field,
+    required String query,
+    required int requestId,
+  }) async {
+    final suggestions = await ref
+        .read(contactsRepositoryProvider)
+        .suggestContacts(query);
+    if (!mounted ||
+        requestId != _recipientSuggestionRequestId ||
+        !_focusNodeFor(field).hasFocus) {
+      return;
+    }
+
+    final currentQuery = _activeRecipientSegment(_controllerFor(field)).query;
+    if (currentQuery != query) {
+      return;
+    }
+
+    setState(() {
+      _suggestionField = suggestions.isEmpty ? null : field;
+      _contactSuggestions = suggestions;
+    });
+  }
+
+  void _hideRecipientSuggestions() {
+    _recipientSuggestionDebounce?.cancel();
+    if (_suggestionField == null && _contactSuggestions.isEmpty) {
+      return;
+    }
+    setState(() {
+      _suggestionField = null;
+      _contactSuggestions = const [];
+    });
+  }
+
+  void _selectRecipientSuggestion(
+    _RecipientField field,
+    ContactSuggestion suggestion,
+  ) {
+    final controller = _controllerFor(field);
+    final segment = _activeRecipientSegment(controller);
+    final replacement =
+        '${segment.start > 0 ? ' ' : ''}${suggestion.recipientText}, ';
+    final nextText =
+        controller.text.substring(0, segment.start) +
+        replacement +
+        controller.text.substring(segment.end);
+    final nextOffset = segment.start + replacement.length;
+    controller.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextOffset),
+    );
+    _recipientSuggestionRequestId++;
+    _hideRecipientSuggestions();
+  }
+
+  TextEditingController _controllerFor(_RecipientField field) {
+    return switch (field) {
+      _RecipientField.to => _toController,
+      _RecipientField.cc => _ccController,
+      _RecipientField.bcc => _bccController,
+    };
+  }
+
+  FocusNode _focusNodeFor(_RecipientField field) {
+    return switch (field) {
+      _RecipientField.to => _toFocusNode,
+      _RecipientField.cc => _ccFocusNode,
+      _RecipientField.bcc => _bccFocusNode,
+    };
+  }
+
+  _RecipientSegment _activeRecipientSegment(TextEditingController controller) {
+    final text = controller.text;
+    final selectionOffset = controller.selection.baseOffset;
+    final cursor = selectionOffset < 0 ? text.length : selectionOffset;
+    final boundedCursor = cursor.clamp(0, text.length);
+    final previousComma = boundedCursor <= 0
+        ? -1
+        : text.lastIndexOf(',', boundedCursor - 1);
+    final nextComma = text.indexOf(',', boundedCursor);
+    final start = previousComma == -1 ? 0 : previousComma + 1;
+    final end = nextComma == -1 ? text.length : nextComma;
+    return _RecipientSegment(
+      start: start,
+      end: end,
+      query: text.substring(start, end).trim(),
+    );
+  }
+
   Future<void> _handleAttachmentAction(_AttachmentAction action) async {
     final controller = ref.read(composeControllerProvider.notifier);
     switch (action) {
@@ -205,107 +359,179 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
     return Scaffold(
       backgroundColor: _composeBackground,
-      body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
-              child: _ComposeToolbar(
-                onBack: () => Navigator.of(context).pop(),
-                onSend: _send,
-                onAttachmentSelected: _handleAttachmentAction,
-                onMoreSelected: _handleMoreAction,
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: _hideRecipientSuggestions,
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+                child: _ComposeToolbar(
+                  onBack: () => Navigator.of(context).pop(),
+                  onSend: _send,
+                  onAttachmentSelected: _handleAttachmentAction,
+                  onMoreSelected: _handleMoreAction,
+                ),
               ),
-            ),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(14, 8, 14, 24),
-                children: [
-                  Material(
-                    color: _composeCard,
-                    elevation: 0,
-                    borderRadius: BorderRadius.circular(26),
-                    child: ClipRRect(
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(14, 8, 14, 24),
+                  children: [
+                    Material(
+                      color: _composeCard,
+                      elevation: 0,
                       borderRadius: BorderRadius.circular(26),
-                      child: Column(
-                        children: [
-                          _ReadonlyComposeRow(label: 'From', value: from),
-                          _ComposeInputRow(
-                            label: 'To',
-                            controller: _toController,
-                            textInputAction: TextInputAction.next,
-                            trailing: IconButton(
-                              tooltip: 'Show Cc and Bcc',
-                              onPressed: () =>
-                                  setState(() => _showCcBcc = !_showCcBcc),
-                              icon: Icon(
-                                _showCcBcc
-                                    ? Icons.keyboard_arrow_up
-                                    : Icons.keyboard_arrow_down,
-                                color: _composeMuted,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(26),
+                        child: Column(
+                          children: [
+                            _ReadonlyComposeRow(label: 'From', value: from),
+                            _ComposeInputRow(
+                              key: const ValueKey('compose-to-row'),
+                              label: 'To',
+                              controller: _toController,
+                              fieldKey: const ValueKey('compose-to-field'),
+                              focusNode: _toFocusNode,
+                              onChanged: (_) => _scheduleRecipientSuggestions(
+                                _RecipientField.to,
+                              ),
+                              textInputAction: TextInputAction.next,
+                              trailing: IconButton(
+                                tooltip: 'Show Cc and Bcc',
+                                onPressed: () =>
+                                    setState(() => _showCcBcc = !_showCcBcc),
+                                icon: Icon(
+                                  _showCcBcc
+                                      ? Icons.keyboard_arrow_up
+                                      : Icons.keyboard_arrow_down,
+                                  color: _composeMuted,
+                                ),
                               ),
                             ),
-                          ),
-                          if (_showCcBcc) ...[
+                            if (_suggestionField == _RecipientField.to)
+                              _ContactSuggestionList(
+                                suggestions: _contactSuggestions,
+                                onSelected: (suggestion) =>
+                                    _selectRecipientSuggestion(
+                                      _RecipientField.to,
+                                      suggestion,
+                                    ),
+                              ),
+                            if (_showCcBcc) ...[
+                              _ComposeInputRow(
+                                key: const ValueKey('compose-cc-row'),
+                                label: 'Cc',
+                                controller: _ccController,
+                                fieldKey: const ValueKey('compose-cc-field'),
+                                focusNode: _ccFocusNode,
+                                onChanged: (_) => _scheduleRecipientSuggestions(
+                                  _RecipientField.cc,
+                                ),
+                                textInputAction: TextInputAction.next,
+                              ),
+                              if (_suggestionField == _RecipientField.cc)
+                                _ContactSuggestionList(
+                                  suggestions: _contactSuggestions,
+                                  onSelected: (suggestion) =>
+                                      _selectRecipientSuggestion(
+                                        _RecipientField.cc,
+                                        suggestion,
+                                      ),
+                                ),
+                              _ComposeInputRow(
+                                key: const ValueKey('compose-bcc-row'),
+                                label: 'Bcc',
+                                controller: _bccController,
+                                fieldKey: const ValueKey('compose-bcc-field'),
+                                focusNode: _bccFocusNode,
+                                onChanged: (_) => _scheduleRecipientSuggestions(
+                                  _RecipientField.bcc,
+                                ),
+                                textInputAction: TextInputAction.next,
+                              ),
+                              if (_suggestionField == _RecipientField.bcc)
+                                _ContactSuggestionList(
+                                  suggestions: _contactSuggestions,
+                                  onSelected: (suggestion) =>
+                                      _selectRecipientSuggestion(
+                                        _RecipientField.bcc,
+                                        suggestion,
+                                      ),
+                                ),
+                            ],
                             _ComposeInputRow(
-                              label: 'Cc',
-                              controller: _ccController,
+                              label: 'Subject',
+                              controller: _subjectController,
+                              fieldKey: const ValueKey('compose-subject-field'),
                               textInputAction: TextInputAction.next,
+                              isSubject: true,
                             ),
-                            _ComposeInputRow(
-                              label: 'Bcc',
-                              controller: _bccController,
-                              textInputAction: TextInputAction.next,
-                            ),
-                          ],
-                          _ComposeInputRow(
-                            label: 'Subject',
-                            controller: _subjectController,
-                            textInputAction: TextInputAction.next,
-                            isSubject: true,
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(22, 18, 22, 12),
-                            child: TextField(
-                              controller: _bodyController,
-                              decoration: InputDecoration(
-                                hintText: 'Compose email',
-                                hintStyle: Theme.of(context).textTheme.bodyLarge
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                22,
+                                18,
+                                22,
+                                12,
+                              ),
+                              child: TextField(
+                                controller: _bodyController,
+                                decoration: InputDecoration(
+                                  hintText: 'Compose email',
+                                  hintStyle: Theme.of(context)
+                                      .textTheme
+                                      .bodyLarge
+                                      ?.copyWith(
+                                        color: _composeMuted,
+                                        fontSize: 16,
+                                        letterSpacing: 0.1,
+                                      ),
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                                style: Theme.of(context).textTheme.bodyLarge
                                     ?.copyWith(
-                                      color: _composeMuted,
                                       fontSize: 16,
                                       letterSpacing: 0.1,
                                     ),
-                                border: InputBorder.none,
-                                isDense: true,
-                                contentPadding: EdgeInsets.zero,
+                                minLines: 12,
+                                maxLines: null,
+                                keyboardType: TextInputType.multiline,
                               ),
-                              style: Theme.of(context).textTheme.bodyLarge
-                                  ?.copyWith(fontSize: 16, letterSpacing: 0.1),
-                              minLines: 12,
-                              maxLines: null,
-                              keyboardType: TextInputType.multiline,
                             ),
-                          ),
-                          if (attachmentsAsync.isLoading)
-                            const Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 24),
-                              child: LinearProgressIndicator(),
-                            ),
-                          if (selectedAttachments.isNotEmpty)
-                            _AttachmentList(attachments: selectedAttachments),
-                        ],
+                            if (attachmentsAsync.isLoading)
+                              const Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 24),
+                                child: LinearProgressIndicator(),
+                              ),
+                            if (selectedAttachments.isNotEmpty)
+                              _AttachmentList(attachments: selectedAttachments),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
+}
+
+class _RecipientSegment {
+  const _RecipientSegment({
+    required this.start,
+    required this.end,
+    required this.query,
+  });
+
+  final int start;
+  final int end;
+  final String query;
 }
 
 class _ComposeToolbar extends StatelessWidget {
@@ -498,16 +724,23 @@ class _ReadonlyComposeRow extends StatelessWidget {
 
 class _ComposeInputRow extends StatelessWidget {
   const _ComposeInputRow({
+    super.key,
     required this.label,
     required this.controller,
+    required this.fieldKey,
     this.trailing,
+    this.focusNode,
+    this.onChanged,
     this.textInputAction,
     this.isSubject = false,
   });
 
   final String label;
   final TextEditingController controller;
+  final Key fieldKey;
   final Widget? trailing;
+  final FocusNode? focusNode;
+  final ValueChanged<String>? onChanged;
   final TextInputAction? textInputAction;
   final bool isSubject;
 
@@ -517,7 +750,10 @@ class _ComposeInputRow extends StatelessWidget {
       label: label,
       trailing: trailing,
       child: TextField(
+        key: fieldKey,
         controller: controller,
+        focusNode: focusNode,
+        onChanged: onChanged,
         decoration: InputDecoration(
           hintStyle: Theme.of(context).textTheme.bodyLarge?.copyWith(
             color: _composeMuted,
@@ -537,6 +773,97 @@ class _ComposeInputRow extends StatelessWidget {
         ),
         textInputAction: textInputAction,
         keyboardType: TextInputType.emailAddress,
+      ),
+    );
+  }
+}
+
+class _ContactSuggestionList extends StatelessWidget {
+  const _ContactSuggestionList({
+    required this.suggestions,
+    required this.onSelected,
+  });
+
+  final List<ContactSuggestion> suggestions;
+  final ValueChanged<ContactSuggestion> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: _composeCard,
+        border: Border(bottom: BorderSide(color: _composeStroke)),
+      ),
+      padding: const EdgeInsets.fromLTRB(80, 4, 12, 8),
+      child: Material(
+        color: _composeCard,
+        elevation: 4,
+        shadowColor: Colors.black26,
+        borderRadius: BorderRadius.circular(8),
+        clipBehavior: Clip.antiAlias,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 240),
+          child: ListView.separated(
+            shrinkWrap: true,
+            padding: EdgeInsets.zero,
+            itemCount: suggestions.length,
+            separatorBuilder: (context, index) =>
+                const Divider(height: 1, color: _composeStroke),
+            itemBuilder: (context, index) {
+              final suggestion = suggestions[index];
+              final displayName = suggestion.displayName?.trim();
+              final hasName = displayName != null && displayName.isNotEmpty;
+              return InkWell(
+                onTap: () => onSelected(suggestion),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.person_outline,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              suggestion.displayLabel,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodyLarge
+                                  ?.copyWith(
+                                    color: const Color(0xFF20242A),
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.1,
+                                  ),
+                            ),
+                            if (hasName)
+                              Text(
+                                suggestion.email,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(
+                                      color: _composeMuted,
+                                      letterSpacing: 0.1,
+                                    ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
       ),
     );
   }
