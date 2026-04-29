@@ -49,6 +49,10 @@ app.*.map.json
 /assets/config/notification_dev.json
 .env
 
+# Android release signing (local only)
+key.properties
+*.jks
+
 # Local generated/reference assets
 ChatGPT Image 16. tra 2026. 16_09_12.png
 FS Mail.png

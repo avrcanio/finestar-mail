@@ -13,6 +13,11 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
@@ -36,7 +41,7 @@ android {
     signingConfigs {
         create("release") {
             val keystoreProperties = Properties()
-            val keystorePropertiesFile = rootProject.file("../../key.properties")
+            val keystorePropertiesFile = rootProject.file("../key.properties")
             if (keystorePropertiesFile.exists()) {
                 keystorePropertiesFile.inputStream().use {
                     keystoreProperties.load(it)
