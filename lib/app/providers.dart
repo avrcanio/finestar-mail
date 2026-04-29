@@ -26,6 +26,7 @@ import '../features/settings/data/account_summaries_repository.dart';
 import '../features/settings/data/settings_repository_impl.dart';
 import '../features/settings/domain/entities/account_summary.dart';
 import '../features/settings/domain/repositories/settings_repository.dart';
+import '../core/platform/share_intent_service.dart';
 
 final loggerProvider = Provider<Logger>((ref) {
   return Logger(printer: PrettyPrinter(methodCount: 0));
@@ -171,6 +172,10 @@ final notificationMailSyncServiceProvider =
         logger: ref.watch(loggerProvider),
       );
     });
+
+final shareIntentServiceProvider = Provider<ShareIntentService>((ref) {
+  return ShareIntentService();
+});
 
 final deviceRegistrationServiceProvider = Provider<DeviceRegistrationService>((
   ref,

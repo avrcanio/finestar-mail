@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/providers.dart';
 import '../../../core/result/result.dart';
 import '../../attachments/domain/entities/attachment_ref.dart';
+import '../../auth/domain/entities/mail_account.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/entities/compose_attachment.dart';
 import '../domain/entities/reply_context.dart';
@@ -98,6 +99,14 @@ class ComposeController extends AsyncNotifier<List<ComposeAttachment>> {
     ]);
   }
 
+  void addLocalAttachments(List<AttachmentRef> attachments) {
+    if (attachments.isEmpty) {
+      return;
+    }
+    final currentAttachments = state.asData?.value ?? const [];
+    _appendLocalAttachments(currentAttachments, attachments);
+  }
+
   Future<Result<void>> send({
     required List<String> to,
     required List<String> cc,
@@ -105,8 +114,11 @@ class ComposeController extends AsyncNotifier<List<ComposeAttachment>> {
     required String subject,
     required String body,
     ReplyContext? replyContext,
+    String? accountIdOverride,
   }) async {
-    final account = await ref.read(activeAccountProvider.future);
+    final account = accountIdOverride == null
+        ? await ref.read(activeAccountProvider.future)
+        : await _loadAccount(accountIdOverride);
     if (account == null) {
       return const Failure<void>('Add an account before sending mail.');
     }
@@ -147,5 +159,15 @@ class ComposeController extends AsyncNotifier<List<ComposeAttachment>> {
       forwardSourceMessage: forwardSourceMessage,
     );
     return ref.watch(composeRepositoryProvider).send(message);
+  }
+
+  Future<MailAccount?> _loadAccount(String accountId) async {
+    final accounts = await ref.read(accountsProvider.future);
+    for (final account in accounts) {
+      if (account.id == accountId) {
+        return account;
+      }
+    }
+    return null;
   }
 }

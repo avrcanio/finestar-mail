@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +10,7 @@ import '../features/mailbox/presentation/mailbox_controller.dart';
 import '../features/notifications/data/mail_notification_payload.dart';
 import '../features/notifications/presentation/in_app_mail_notification_controller.dart';
 import '../features/notifications/presentation/in_app_mail_notification_host.dart';
+import '../core/platform/share_intent_service.dart';
 import 'providers.dart';
 import 'router/app_route.dart';
 import 'router/app_router.dart';
@@ -23,6 +26,7 @@ class _FinestarMailAppState extends ConsumerState<FinestarMailApp>
     with WidgetsBindingObserver {
   bool _notificationListenersStarted = false;
   Future<void>? _deviceRegistration;
+  StreamSubscription<List<SharedFile>>? _shareSubscription;
 
   @override
   void initState() {
@@ -36,12 +40,31 @@ class _FinestarMailAppState extends ConsumerState<FinestarMailApp>
       _startNotificationListeners();
       _registerAllDevices();
     }, fireImmediately: true);
+    _startShareIntentListeners();
   }
 
   @override
   void dispose() {
+    _shareSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  void _startShareIntentListeners() {
+    final shareService = ref.read(shareIntentServiceProvider);
+    Future.microtask(() async {
+      final initial = await shareService.getInitialSharedFiles();
+      if (!mounted || initial.isEmpty) {
+        return;
+      }
+      ref.read(appRouterProvider).go(AppRoute.shareCompose.path, extra: initial);
+    });
+    _shareSubscription = shareService.sharedFilesStream().listen((files) {
+      if (!mounted || files.isEmpty) {
+        return;
+      }
+      ref.read(appRouterProvider).go(AppRoute.shareCompose.path, extra: files);
+    });
   }
 
   @override

@@ -3,6 +3,7 @@ enum AppRoute {
   login('/login'),
   inbox('/inbox'),
   messageDetail('/message/:id'),
+  shareCompose('/share/compose'),
   compose('/compose'),
   settings('/settings');
 
