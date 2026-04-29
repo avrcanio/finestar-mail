@@ -138,6 +138,25 @@ class BackendMailApiClient {
     return BackendMessageDetailResponse.fromJson(json);
   }
 
+  Future<BackendMessageTranslationResponse> translateMessage({
+    required String token,
+    required String folder,
+    required String uid,
+    required String targetLanguage,
+  }) async {
+    final json = await _requestJson(
+      method: 'POST',
+      path: '/api/mail/messages/${Uri.encodeComponent(uid)}/translate',
+      token: token,
+      body: {
+        'folder': folder,
+        'target_language': targetLanguage.trim(),
+      },
+      requestTimeout: const Duration(seconds: 70),
+    );
+    return BackendMessageTranslationResponse.fromJson(json);
+  }
+
   Future<BackendSendResponse> send({
     required String token,
     required BackendSendRequest request,
@@ -257,6 +276,7 @@ class BackendMailApiClient {
     Map<String, String>? queryParameters,
     String? token,
     Map<String, dynamic>? body,
+    Duration? requestTimeout,
   }) async {
     final uri = await _uri(path, queryParameters);
     final headers = <String, String>{
@@ -271,7 +291,7 @@ class BackendMailApiClient {
       uri: uri,
       headers: headers,
       body: body == null ? null : jsonEncode(body),
-    ).timeout(timeout);
+    ).timeout(requestTimeout ?? timeout);
 
     final decoded = _decodeObject(response.body);
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -430,6 +450,9 @@ class BackendMailApiException implements Exception {
         currentCode == 'not_authenticated') {
       return 'Mailbox authentication failed. Check your email and password.';
     }
+    if (currentCode == 'mailbox_credentials_missing') {
+      return 'Mailbox credentials are missing. Please sign in again.';
+    }
     if (currentCode == 'invalid_limit' || currentCode == 'invalid_before_uid') {
       return 'The mailbox request was invalid.';
     }
@@ -472,6 +495,15 @@ class BackendMailApiException implements Exception {
     }
     if (currentCode == 'mail_send_failed') {
       return 'The backend could not send the message.';
+    }
+    if (currentCode == 'empty_message_body') {
+      return 'This message has no subject or body text to translate.';
+    }
+    if (currentCode == 'translation_unavailable') {
+      return 'Translation is temporarily unavailable. Try again later.';
+    }
+    if (currentCode == 'translation_failed') {
+      return 'Translation failed. Try again.';
     }
     if (detail != null && detail!.trim().isNotEmpty) {
       return detail!;
@@ -1223,6 +1255,53 @@ class BackendRestoreResponse {
       failed: _listOfObjects(
         json['failed'],
       ).map(BackendDeleteFailureDto.fromJson).toList(),
+    );
+  }
+}
+
+class BackendMessageTranslationResponse {
+  const BackendMessageTranslationResponse({
+    required this.accountEmail,
+    required this.folder,
+    required this.uid,
+    required this.messageId,
+    required this.targetLanguage,
+    required this.sourceLanguage,
+    required this.translatedSubject,
+    required this.translatedText,
+    required this.translatedHtml,
+    required this.cached,
+    required this.truncated,
+    required this.model,
+  });
+
+  final String accountEmail;
+  final String folder;
+  final String uid;
+  final String messageId;
+  final String targetLanguage;
+  final String sourceLanguage;
+  final String translatedSubject;
+  final String translatedText;
+  final String translatedHtml;
+  final bool cached;
+  final bool truncated;
+  final String model;
+
+  factory BackendMessageTranslationResponse.fromJson(Map<String, dynamic> json) {
+    return BackendMessageTranslationResponse(
+      accountEmail: json['account_email'] as String? ?? '',
+      folder: json['folder'] as String? ?? 'INBOX',
+      uid: json['uid']?.toString() ?? '',
+      messageId: json['message_id'] as String? ?? '',
+      targetLanguage: json['target_language'] as String? ?? '',
+      sourceLanguage: json['source_language'] as String? ?? '',
+      translatedSubject: json['translated_subject'] as String? ?? '',
+      translatedText: json['translated_text'] as String? ?? '',
+      translatedHtml: json['translated_html'] as String? ?? '',
+      cached: json['cached'] as bool? ?? false,
+      truncated: json['truncated'] as bool? ?? false,
+      model: json['model'] as String? ?? '',
     );
   }
 }

@@ -19,9 +19,11 @@ import '../../../core/widgets/state_views.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../compose/domain/entities/reply_context.dart';
 import '../domain/entities/mail_message_attachment.dart';
+import '../domain/entities/mail_message_translation.dart';
 import '../domain/entities/mail_thread.dart';
 import 'mailbox_controller.dart';
 import 'message_detail_route_result.dart';
+import 'message_translation_controller.dart';
 
 const _screenBackground = Color(0xFFF7F8FC);
 const _mutedText = Color(0xFF5D636B);
@@ -77,6 +79,11 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                           mode: _MessageTopBarMode.disabled,
                           onBack: _navigateBack,
                           onAction: () {},
+                          onTranslate: null,
+                          onToggleTranslation: null,
+                          isTranslating: false,
+                          hasTranslation: false,
+                          showTranslated: false,
                         ),
                         const Expanded(
                           child: EmptyStateView(
@@ -89,6 +96,28 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                   }
                   _ensureDefaultExpansion(visibleThread);
                   _markSelectedMessageRead(visibleThread);
+                  final selectedMessageId = visibleThread.selectedMessageId;
+                  final translationAsync = ref.watch(
+                    messageTranslationControllerProvider(selectedMessageId),
+                  );
+                  final translationState = translationAsync.asData?.value;
+                  final translation = translationState?.translation;
+                  final showTranslated =
+                      translationState?.showTranslated ?? false;
+                  final translatedSubject =
+                      translation?.translatedSubject.trim() ?? '';
+                  final translatedBody =
+                      translation?.translatedText.trim() ?? '';
+                  final translatedHtml =
+                      translation?.translatedHtml.trim() ?? '';
+                  final hasAnyTranslatedContent =
+                      translatedSubject.isNotEmpty ||
+                      translatedBody.isNotEmpty ||
+                      translatedHtml.isNotEmpty;
+                  final displaySubject =
+                      showTranslated && translatedSubject.isNotEmpty
+                          ? translatedSubject
+                          : visibleThread.subject;
                   return Column(
                     children: [
                       _MessageTopBar(
@@ -100,10 +129,40 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                         onAction: () => _selectedMessageIsTrash(visibleThread)
                             ? _restoreSelectedMessageToInbox(visibleThread)
                             : _moveSelectedMessageToTrash(visibleThread),
+                        onTranslate: _selectedMessageIsTrash(visibleThread)
+                            ? null
+                            : () => _translateSelectedMessage(visibleThread),
+                        onToggleTranslation:
+                            translation == null || !hasAnyTranslatedContent
+                                ? null
+                                : () => ref
+                                    .read(
+                                      messageTranslationControllerProvider(
+                                        selectedMessageId,
+                                      ).notifier,
+                                    )
+                                    .toggleShowTranslated(),
+                        isTranslating: translationAsync.isLoading,
+                        hasTranslation: translation != null,
+                        showTranslated: showTranslated,
                       ),
+                      if (translationAsync.hasError)
+                        _TranslationErrorBanner(
+                          message: translationAsync.error.toString(),
+                          onRetry: () => ref
+                              .read(
+                                messageTranslationControllerProvider(
+                                  selectedMessageId,
+                                ).notifier,
+                              )
+                              .translate(),
+                        ),
                       Expanded(
                         child: _MessageThreadContent(
                           thread: visibleThread,
+                          subjectOverride: displaySubject,
+                          translation: translation,
+                          showTranslated: showTranslated,
                           outerScrollController: _outerScrollController,
                           expandedMessageIds: _expandedMessageIds,
                           visibleQuotedMessageIds: _visibleQuotedMessageIds,
@@ -138,6 +197,11 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                       mode: _MessageTopBarMode.disabled,
                       onBack: _navigateBack,
                       onAction: () {},
+                      onTranslate: null,
+                      onToggleTranslation: null,
+                      isTranslating: false,
+                      hasTranslation: false,
+                      showTranslated: false,
                     ),
                     Expanded(child: ErrorStateView(message: error.toString())),
                   ],
@@ -149,6 +213,11 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                       mode: _MessageTopBarMode.disabled,
                       onBack: _navigateBack,
                       onAction: () {},
+                      onTranslate: null,
+                      onToggleTranslation: null,
+                      isTranslating: false,
+                      hasTranslation: false,
+                      showTranslated: false,
                     ),
                     const Expanded(
                       child: Center(child: CircularProgressIndicator()),
@@ -471,6 +540,99 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
   }
+
+  Future<void> _translateSelectedMessage(MailThread thread) async {
+    final selectedId = thread.selectedMessageId;
+    final asyncState = ref.read(
+      messageTranslationControllerProvider(selectedId),
+    );
+    final currentLanguage = asyncState.asData?.value.targetLanguage ??
+        MessageTranslationController.fallbackLanguage;
+    final hasExistingTranslation =
+        asyncState.asData?.value.translation != null;
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        const languages = <String, String>{
+          'hr': 'Croatian',
+          'en': 'English',
+          'es': 'Spanish',
+          'de': 'German',
+          'fr': 'French',
+          'it': 'Italian',
+          'pt': 'Portuguese',
+          'zh': 'Chinese',
+        };
+        return SimpleDialog(
+          title: const Text('Translate to'),
+          children: [
+            for (final entry in languages.entries)
+              ListTile(
+                title: Text('${entry.value} (${entry.key})'),
+                trailing: entry.key == currentLanguage
+                    ? const Icon(Icons.check, color: _mutedText)
+                    : null,
+                onTap: () => Navigator.of(dialogContext).pop(entry.key),
+              ),
+          ],
+        );
+      },
+    );
+    if (!mounted || picked == null) {
+      return;
+    }
+    final controller = ref.read(
+      messageTranslationControllerProvider(selectedId).notifier,
+    );
+    try {
+      await controller.setTargetLanguage(picked);
+      if (hasExistingTranslation && picked.trim() == currentLanguage.trim()) {
+        controller.toggleShowTranslated();
+        return;
+      }
+      await controller.translate();
+    } catch (error) {
+      _showSnackBar(error.toString());
+    }
+  }
+}
+
+class _TranslationErrorBanner extends StatelessWidget {
+  const _TranslationErrorBanner({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 6, 18, 6),
+      child: Material(
+        color: const Color(0xFFFFF3F3),
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+          child: Row(
+            children: [
+              const Icon(Icons.error_outline, color: Color(0xFFB42318)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: const Color(0xFF7A271A),
+                  ),
+                ),
+              ),
+              TextButton(onPressed: onRetry, child: const Text('Retry')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 enum _MessageTopBarMode { delete, restore, disabled }
@@ -481,12 +643,22 @@ class _MessageTopBar extends StatelessWidget {
     required this.onAction,
     required this.mode,
     required this.isProcessing,
+    required this.onTranslate,
+    required this.onToggleTranslation,
+    required this.isTranslating,
+    required this.hasTranslation,
+    required this.showTranslated,
   });
 
   final VoidCallback onBack;
   final VoidCallback onAction;
   final _MessageTopBarMode mode;
   final bool isProcessing;
+  final VoidCallback? onTranslate;
+  final VoidCallback? onToggleTranslation;
+  final bool isTranslating;
+  final bool hasTranslation;
+  final bool showTranslated;
 
   @override
   Widget build(BuildContext context) {
@@ -500,6 +672,25 @@ class _MessageTopBar extends StatelessWidget {
             icon: const Icon(Icons.arrow_back, color: Color(0xFF202124)),
           ),
           const Spacer(),
+          IconButton(
+            tooltip: 'Translate',
+            onPressed: onTranslate,
+            icon: isTranslating
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2.4),
+                  )
+                : const Icon(Icons.translate_outlined),
+          ),
+          if (hasTranslation)
+            IconButton(
+              tooltip: showTranslated ? 'Show original' : 'Show translated',
+              onPressed: onToggleTranslation,
+              icon: Icon(
+                showTranslated ? Icons.subject_outlined : Icons.translate,
+              ),
+            ),
           IconButton(
             tooltip: 'Archive',
             onPressed: () {},
@@ -543,6 +734,9 @@ class _MessageTopBar extends StatelessWidget {
 class _MessageThreadContent extends StatelessWidget {
   const _MessageThreadContent({
     required this.thread,
+    required this.subjectOverride,
+    required this.translation,
+    required this.showTranslated,
     required this.outerScrollController,
     required this.expandedMessageIds,
     required this.visibleQuotedMessageIds,
@@ -557,6 +751,9 @@ class _MessageThreadContent extends StatelessWidget {
   });
 
   final MailThread thread;
+  final String subjectOverride;
+  final MailMessageTranslation? translation;
+  final bool showTranslated;
   final ScrollController outerScrollController;
   final Set<String> expandedMessageIds;
   final Set<String> visibleQuotedMessageIds;
@@ -586,7 +783,12 @@ class _MessageThreadContent extends StatelessWidget {
         controller: outerScrollController,
         padding: const EdgeInsets.fromLTRB(18, 12, 18, 32),
         children: [
-          _SubjectHeader(subject: thread.subject, folderName: selectedFolder),
+          _SubjectHeader(
+            subject: subjectOverride,
+            folderName: selectedFolder,
+            translation: translation,
+            showTranslated: showTranslated,
+          ),
           const SizedBox(height: 18),
           for (final message in thread.messages) ...[
             _ThreadMessageCard(
@@ -594,6 +796,20 @@ class _MessageThreadContent extends StatelessWidget {
               outerScrollController: outerScrollController,
               isExpanded: expandedMessageIds.contains(message.id),
               isQuotedVisible: visibleQuotedMessageIds.contains(message.id),
+              overrideHtml:
+                  showTranslated &&
+                          translation != null &&
+                          message.id == thread.selectedMessageId &&
+                          translation!.translatedHtml.trim().isNotEmpty
+                      ? translation!.translatedHtml
+                      : null,
+              overrideBody:
+                  showTranslated &&
+                          translation != null &&
+                          message.id == thread.selectedMessageId &&
+                                          translation!.translatedText.trim().isNotEmpty
+                                      ? translation!.translatedText
+                      : null,
               onToggleExpanded: () => onToggleExpanded(message.id),
               onToggleQuoted: () => onToggleQuoted(message.id),
               emailHtmlViewBuilder: emailHtmlViewBuilder,
@@ -621,13 +837,27 @@ class _MessageThreadContent extends StatelessWidget {
 }
 
 class _SubjectHeader extends StatelessWidget {
-  const _SubjectHeader({required this.subject, required this.folderName});
+  const _SubjectHeader({
+    required this.subject,
+    required this.folderName,
+    required this.translation,
+    required this.showTranslated,
+  });
 
   final String subject;
   final String? folderName;
+  final MailMessageTranslation? translation;
+  final bool showTranslated;
 
   @override
   Widget build(BuildContext context) {
+    final translationValue = translation;
+    final meta = translationValue == null
+        ? null
+        : 'Translated to ${translationValue.targetLanguage}'
+            '${translationValue.sourceLanguage.trim().isEmpty ? '' : ' · from ${translationValue.sourceLanguage}'}'
+            '${translationValue.cached ? ' · cached' : ''}'
+            '${translationValue.truncated ? ' · truncated' : ''}';
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -657,6 +887,26 @@ class _SubjectHeader extends StatelessWidget {
                     color: const Color(0xFF5B3B00),
                   ),
                 ),
+              if (meta != null)
+                Chip(
+                  visualDensity: VisualDensity.compact,
+                  label: Text(meta),
+                  backgroundColor:
+                      showTranslated ? const Color(0xFFEAF3FF) : _screenBackground,
+                  side: BorderSide.none,
+                  labelStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: _mutedText,
+                  ),
+                ),
+              if (showTranslated &&
+                  translationValue != null &&
+                  translationValue.truncated)
+                Text(
+                  'Dio poruke nije preveden zbog duljine.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: _mutedText,
+                  ),
+                ),
             ],
           ),
         ),
@@ -677,6 +927,8 @@ class _ThreadMessageCard extends StatelessWidget {
     required this.isExpanded,
     required this.isQuotedVisible,
     required this.emailHtmlViewBuilder,
+    required this.overrideHtml,
+    required this.overrideBody,
     required this.onToggleExpanded,
     required this.onToggleQuoted,
     required this.onReply,
@@ -691,6 +943,8 @@ class _ThreadMessageCard extends StatelessWidget {
   final bool isExpanded;
   final bool isQuotedVisible;
   final Widget Function(String html)? emailHtmlViewBuilder;
+  final String? overrideHtml;
+  final String? overrideBody;
   final VoidCallback onToggleExpanded;
   final VoidCallback onToggleQuoted;
   final VoidCallback onReply;
@@ -702,10 +956,23 @@ class _ThreadMessageCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final quotedBody = message.quotedBody;
-    final body = message.visibleBody.isEmpty
-        ? message.bodyPlain
-        : message.visibleBody;
+    final htmlOverride = overrideHtml?.trim();
+    final bodyOverride = overrideBody?.trim();
+    final quotedBody =
+        (bodyOverride != null && bodyOverride.isNotEmpty) ||
+                (htmlOverride != null && htmlOverride.isNotEmpty)
+            ? null
+            : message.quotedBody;
+    final body =
+        (bodyOverride != null && bodyOverride.isNotEmpty)
+            ? bodyOverride
+            : (message.visibleBody.isEmpty ? message.bodyPlain : message.visibleBody);
+    final htmlBody =
+        (htmlOverride != null && htmlOverride.isNotEmpty)
+            ? htmlOverride
+            : ((bodyOverride != null && bodyOverride.isNotEmpty)
+                  ? null
+                  : message.bodyHtml);
 
     return Material(
       color: Colors.white,
@@ -786,7 +1053,7 @@ class _ThreadMessageCard extends StatelessWidget {
             const SizedBox(height: 20),
             _MessageBodyView(
               body: body,
-              htmlBody: message.bodyHtml,
+              htmlBody: htmlBody,
               isExpanded: isExpanded,
               outerScrollController: outerScrollController,
               onToggleExpanded: onToggleExpanded,
@@ -1109,6 +1376,7 @@ class _EmailHtmlView extends StatefulWidget {
 
 class _EmailHtmlViewState extends State<_EmailHtmlView> {
   late final WebViewController _controller;
+  String? _loadedHtml;
 
   @override
   void initState() {
@@ -1130,7 +1398,20 @@ class _EmailHtmlViewState extends State<_EmailHtmlView> {
           },
         ),
       )
-      ..loadHtmlString(wrapEmailHtmlForRendering(widget.html));
+      ..loadHtmlString(_wrapAndTrack(widget.html));
+  }
+
+  @override
+  void didUpdateWidget(covariant _EmailHtmlView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.html != widget.html && _loadedHtml != widget.html) {
+      _controller.loadHtmlString(_wrapAndTrack(widget.html));
+    }
+  }
+
+  String _wrapAndTrack(String rawHtml) {
+    _loadedHtml = rawHtml;
+    return wrapEmailHtmlForRendering(rawHtml);
   }
 
   @override

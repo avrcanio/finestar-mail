@@ -12,6 +12,7 @@ import '../domain/entities/mail_message_attachment.dart';
 import '../domain/entities/mail_message_detail.dart';
 import '../domain/entities/mail_message_page.dart';
 import '../domain/entities/mail_message_summary.dart';
+import '../domain/entities/mail_message_translation.dart';
 import '../domain/entities/mail_restore_result.dart';
 import '../domain/entities/mail_thread.dart';
 import '../domain/repositories/mailbox_repository.dart';
@@ -1078,6 +1079,43 @@ class MailboxRepositoryImpl implements MailboxRepository {
             ),
           )
           .toList(),
+    );
+  }
+
+  @override
+  Future<MailMessageTranslation> translateMessage({
+    required String accountId,
+    required String messageId,
+    required String targetLanguage,
+  }) async {
+    final token = await _authToken(accountId);
+    if (token == null) {
+      throw StateError('Active account session is missing.');
+    }
+
+    final uid = _uidFromMessageId(messageId);
+    if (uid == null) {
+      throw StateError('Translation is only available for backend mail.');
+    }
+    final folder = await _folderPathForMessage(accountId, messageId);
+    final response = await _backendMailApiClient!.translateMessage(
+      token: token,
+      folder: folder,
+      uid: uid,
+      targetLanguage: targetLanguage,
+    );
+    return MailMessageTranslation(
+      folder: response.folder,
+      uid: response.uid,
+      messageIdHeader: response.messageId,
+      targetLanguage: response.targetLanguage,
+      sourceLanguage: response.sourceLanguage,
+      translatedSubject: response.translatedSubject,
+      translatedText: response.translatedText,
+      translatedHtml: response.translatedHtml,
+      cached: response.cached,
+      truncated: response.truncated,
+      model: response.model,
     );
   }
 

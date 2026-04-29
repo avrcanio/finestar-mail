@@ -7,6 +7,8 @@ class SecureStorageService {
     : _secureStorage = secureStorage ?? const FlutterSecureStorage();
 
   static const _activeAccountIdKey = 'active_account_id';
+  static const _mailTranslationTargetLanguageKey =
+      'mail_translation_target_language';
 
   final FlutterSecureStorage _secureStorage;
 
@@ -50,6 +52,17 @@ class SecureStorageService {
 
   Future<void> clearActiveAccountId() {
     return _secureStorage.delete(key: _activeAccountIdKey);
+  }
+
+  Future<void> saveMailTranslationTargetLanguage(String languageCode) {
+    return _secureStorage.write(
+      key: _mailTranslationTargetLanguageKey,
+      value: languageCode.trim(),
+    );
+  }
+
+  Future<String?> readMailTranslationTargetLanguage() {
+    return _secureStorage.read(key: _mailTranslationTargetLanguageKey);
   }
 
   Future<void> migrateLegacyAccountIfPresent({

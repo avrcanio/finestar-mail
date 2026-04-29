@@ -10,6 +10,7 @@ import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_atta
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_summary.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_translation.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_restore_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_thread.dart';
 import 'package:finestar_mail/features/mailbox/domain/repositories/mailbox_repository.dart';
@@ -1160,6 +1161,27 @@ class _FakeMailboxRepository implements MailboxRepository {
     required String messageId,
   }) {
     throw UnimplementedError();
+  }
+
+  @override
+  Future<MailMessageTranslation> translateMessage({
+    required String accountId,
+    required String messageId,
+    required String targetLanguage,
+  }) async {
+    return MailMessageTranslation(
+      folder: 'INBOX',
+      uid: '0',
+      messageIdHeader: '<translated@example.com>',
+      targetLanguage: targetLanguage,
+      sourceLanguage: 'en',
+      translatedSubject: 'Translated subject',
+      translatedText: 'Translated body',
+      translatedHtml: '<p>Translated body</p>',
+      cached: false,
+      truncated: false,
+      model: 'test',
+    );
   }
 
   @override

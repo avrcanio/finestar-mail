@@ -7,6 +7,7 @@ import '../entities/mail_message_page.dart';
 import '../entities/mail_message_summary.dart';
 import '../entities/mail_restore_result.dart';
 import '../entities/mail_thread.dart';
+import '../entities/mail_message_translation.dart';
 
 abstract class MailboxRepository {
   Future<List<MailFolder>> getFolders(String accountId);
@@ -61,6 +62,12 @@ abstract class MailboxRepository {
   Future<MailThread> getMessageThread({
     required String accountId,
     required String messageId,
+  });
+
+  Future<MailMessageTranslation> translateMessage({
+    required String accountId,
+    required String messageId,
+    required String targetLanguage,
   });
 
   Future<MailDeleteResult> moveMessagesToTrash({
