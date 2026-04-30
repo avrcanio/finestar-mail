@@ -27,6 +27,7 @@ import '../features/settings/data/settings_repository_impl.dart';
 import '../features/settings/domain/entities/account_summary.dart';
 import '../features/settings/domain/repositories/settings_repository.dart';
 import '../core/platform/share_intent_service.dart';
+import '../core/platform/document_scanner_service.dart';
 
 final loggerProvider = Provider<Logger>((ref) {
   return Logger(printer: PrettyPrinter(methodCount: 0));
@@ -175,6 +176,10 @@ final notificationMailSyncServiceProvider =
 
 final shareIntentServiceProvider = Provider<ShareIntentService>((ref) {
   return ShareIntentService();
+});
+
+final documentScannerServiceProvider = Provider<DocumentScannerService>((ref) {
+  return DocumentScannerService();
 });
 
 final deviceRegistrationServiceProvider = Provider<DeviceRegistrationService>((

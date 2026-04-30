@@ -226,6 +226,78 @@ class BackendMailApiClient {
     return BackendDeleteResponse.fromJson(json);
   }
 
+  Future<BackendReceiptOcrResult> receiptOcr({
+    required String token,
+    required Uint8List imageBytes,
+    required String contentType,
+    String filename = 'receipt.jpg',
+    Duration requestTimeout = const Duration(seconds: 120),
+  }) async {
+    final uri = await _uri('/api/receipts/ocr', null);
+    final multipart = http.MultipartRequest('POST', uri)
+      ..headers['Accept'] = '*/*'
+      ..headers['Authorization'] = 'Token ${token.trim()}'
+      ..files.add(
+        http.MultipartFile.fromBytes(
+          'image',
+          imageBytes,
+          filename: filename,
+          contentType: _mediaType(contentType),
+        ),
+      );
+
+    final streamed = await _httpClient.send(multipart).timeout(requestTimeout);
+    final response = await http.Response.fromStream(streamed);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final decoded = _tryDecodeObject(utf8.decode(response.bodyBytes));
+      throw BackendMailApiException(
+        statusCode: response.statusCode,
+        code: decoded['error'] as String?,
+        detail: decoded['detail'] as String?,
+      );
+    }
+
+    final contentTypeHeader = response.headers['content-type'] ?? '';
+    final boundary = _boundaryFromMultipartContentType(contentTypeHeader);
+    if (boundary == null) {
+      throw const FormatException(
+        'Expected multipart/mixed response with boundary.',
+      );
+    }
+
+    final parts = _parseMultipartMixed(response.bodyBytes, boundary: boundary);
+    Map<String, dynamic>? json;
+    Uint8List? pdfBytes;
+    String? pdfFilename;
+    for (final part in parts) {
+      final partType = part.contentType.toLowerCase();
+      if (partType.startsWith('application/json')) {
+        final decoded = jsonDecode(utf8.decode(part.body));
+        if (decoded is Map<String, dynamic>) {
+          json = decoded;
+        } else {
+          throw const FormatException('Expected JSON object in OCR response.');
+        }
+      } else if (partType.startsWith('application/pdf')) {
+        pdfBytes = Uint8List.fromList(part.body);
+        pdfFilename = _filenameFromContentDisposition(part.contentDisposition);
+      }
+    }
+
+    if (json == null) {
+      throw const FormatException('OCR response did not include JSON part.');
+    }
+    if (pdfBytes == null) {
+      throw const FormatException('OCR response did not include PDF part.');
+    }
+
+    return BackendReceiptOcrResult(
+      json: json,
+      pdfBytes: pdfBytes,
+      pdfFilename: pdfFilename ?? 'receipt.pdf',
+    );
+  }
+
   Future<BackendDeleteResponse> deleteMessage({
     required String token,
     required String folder,
@@ -430,6 +502,162 @@ class BackendMailApiClient {
     ).firstMatch(value);
     return plainMatch?.group(1)?.trim();
   }
+}
+
+class BackendReceiptOcrResult {
+  const BackendReceiptOcrResult({
+    required this.json,
+    required this.pdfBytes,
+    required this.pdfFilename,
+  });
+
+  final Map<String, dynamic> json;
+  final Uint8List pdfBytes;
+  final String pdfFilename;
+}
+
+class _MultipartPart {
+  const _MultipartPart({
+    required this.contentType,
+    required this.contentDisposition,
+    required this.body,
+  });
+
+  final String contentType;
+  final String? contentDisposition;
+  final List<int> body;
+}
+
+String? _boundaryFromMultipartContentType(String value) {
+  final boundaryMatch = RegExp(
+    r'boundary=([^\s;]+)',
+    caseSensitive: false,
+  ).firstMatch(value);
+  if (boundaryMatch == null) {
+    return null;
+  }
+  var boundary = boundaryMatch.group(1) ?? '';
+  boundary = boundary.trim();
+  if (boundary.startsWith('"') && boundary.endsWith('"') && boundary.length > 1) {
+    boundary = boundary.substring(1, boundary.length - 1);
+  }
+  return boundary.isEmpty ? null : boundary;
+}
+
+List<_MultipartPart> _parseMultipartMixed(
+  List<int> bytes, {
+  required String boundary,
+}) {
+  final delimiter = ascii.encode('--$boundary');
+  final parts = <_MultipartPart>[];
+
+  final indexes = <int>[];
+  var searchFrom = 0;
+  while (true) {
+    final idx = _indexOf(bytes, delimiter, start: searchFrom);
+    if (idx == -1) {
+      break;
+    }
+    indexes.add(idx);
+    searchFrom = idx + delimiter.length;
+  }
+
+  if (indexes.isEmpty) {
+    return const [];
+  }
+
+  for (var i = 0; i < indexes.length; i++) {
+    final start = indexes[i] + delimiter.length;
+    final end = i + 1 < indexes.length ? indexes[i + 1] : bytes.length;
+    var segment = bytes.sublist(start, end);
+    segment = _trimLeadingCrlf(segment);
+    if (segment.length >= 2 && segment[0] == 45 && segment[1] == 45) {
+      // '--' end marker
+      continue;
+    }
+    if (segment.isEmpty) {
+      continue;
+    }
+
+    final headerEnd = _indexOf(segment, const [13, 10, 13, 10], start: 0);
+    if (headerEnd == -1) {
+      continue;
+    }
+    final headerBytes = segment.sublist(0, headerEnd);
+    var bodyBytes = segment.sublist(headerEnd + 4);
+    bodyBytes = _trimTrailingCrlf(bodyBytes);
+
+    final headers = utf8.decode(headerBytes);
+    final contentType = _headerValue(headers, 'content-type') ?? '';
+    final contentDisposition = _headerValue(headers, 'content-disposition');
+    if (contentType.trim().isEmpty) {
+      continue;
+    }
+    parts.add(
+      _MultipartPart(
+        contentType: contentType,
+        contentDisposition: contentDisposition,
+        body: bodyBytes,
+      ),
+    );
+  }
+
+  return parts;
+}
+
+String? _headerValue(String rawHeaders, String headerName) {
+  final lines = rawHeaders.split('\r\n');
+  for (final line in lines) {
+    final idx = line.indexOf(':');
+    if (idx <= 0) {
+      continue;
+    }
+    final name = line.substring(0, idx).trim().toLowerCase();
+    if (name != headerName.toLowerCase()) {
+      continue;
+    }
+    return line.substring(idx + 1).trim();
+  }
+  return null;
+}
+
+List<int> _trimLeadingCrlf(List<int> bytes) {
+  var start = 0;
+  while (start + 1 < bytes.length && bytes[start] == 13 && bytes[start + 1] == 10) {
+    start += 2;
+  }
+  return start == 0 ? bytes : bytes.sublist(start);
+}
+
+List<int> _trimTrailingCrlf(List<int> bytes) {
+  var end = bytes.length;
+  while (end - 2 >= 0 && bytes[end - 2] == 13 && bytes[end - 1] == 10) {
+    end -= 2;
+  }
+  return end == bytes.length ? bytes : bytes.sublist(0, end);
+}
+
+int _indexOf(List<int> source, List<int> pattern, {required int start}) {
+  if (pattern.isEmpty) {
+    return start.clamp(0, source.length);
+  }
+  if (start < 0) {
+    start = 0;
+  }
+  final max = source.length - pattern.length;
+  for (var i = start; i <= max; i++) {
+    var match = true;
+    for (var j = 0; j < pattern.length; j++) {
+      if (source[i + j] != pattern[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 class BackendMailApiException implements Exception {

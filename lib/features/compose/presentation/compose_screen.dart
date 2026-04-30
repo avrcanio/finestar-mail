@@ -1,14 +1,21 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
+import '../../../data/remote/backend_mail_api_client.dart';
 import '../../contacts/domain/entities/contact_suggestion.dart';
+import '../../attachments/domain/entities/attachment_ref.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../auth/data/backend_auth_token_selector.dart';
 import '../domain/entities/compose_attachment.dart';
 import '../domain/entities/reply_context.dart';
 import '../domain/entities/share_compose_args.dart';
@@ -22,6 +29,7 @@ enum _ComposeMoreAction {
   scheduleSend,
   addFromContacts,
   confidentialMode,
+  r1Receipt,
   saveDraft,
   discard,
   settings,
@@ -56,6 +64,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   bool _showCcBcc = false;
   bool _sending = false;
+  bool _ocrRunning = false;
   Timer? _recipientSuggestionDebounce;
   int _recipientSuggestionRequestId = 0;
   _RecipientField? _suggestionField;
@@ -344,6 +353,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   Future<void> _handleMoreAction(_ComposeMoreAction action) async {
     switch (action) {
+      case _ComposeMoreAction.r1Receipt:
+        await _handleR1Receipt();
       case _ComposeMoreAction.discard:
         final shouldDiscard = await showDialog<bool>(
           context: context,
@@ -373,6 +384,142 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             ),
           );
         }
+    }
+  }
+
+  Future<void> _handleR1Receipt() async {
+    if (_ocrRunning) {
+      return;
+    }
+
+    setState(() => _ocrRunning = true);
+    try {
+      final selected = await ref
+          .read(backendAuthTokenSelectorProvider)
+          .selectToken();
+      if (!mounted) {
+        return;
+      }
+      if (selected == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sign in before using R1 račun.')),
+        );
+        return;
+      }
+
+      final scanned = await ref
+          .read(documentScannerServiceProvider)
+          .scanFirstPageAsImage();
+      if (!mounted) {
+        return;
+      }
+      if (scanned == null) {
+        return;
+      }
+
+      final result = await ref.read(backendMailApiClientProvider).receiptOcr(
+            token: selected.token,
+            imageBytes: scanned.bytes,
+            contentType: scanned.contentType,
+            filename: scanned.filename,
+            requestTimeout: const Duration(seconds: 120),
+          );
+
+      if (!mounted) {
+        return;
+      }
+
+      // New API contract (issue #43): JSON part can be a wrapper:
+      // { receipt: {...}, draft: {subject, body}, artifacts_dir, warnings, ... }
+      final receiptJson = _extractReceiptPayload(result.json);
+      final warnings = _extractWarnings(result.json);
+      if (warnings.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Receipt OCR warnings: ${warnings.join(', ')}')),
+        );
+      }
+      final effectiveReceiptJson =
+          await _ensurePaymentSelectionIfMissing(receiptJson);
+      if (!mounted) {
+        return;
+      }
+      final effectiveResponseJson = _mergeReceiptIntoResponseJson(
+        result.json,
+        effectiveReceiptJson,
+      );
+
+      final tempDir = await getTemporaryDirectory();
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final jsonFilename = 'r1_$timestamp.json';
+      final pdfFilename = _safeFilename(result.pdfFilename, fallback: 'r1_$timestamp.pdf');
+
+      final jsonPath = p.join(tempDir.path, jsonFilename);
+      final pdfPath = p.join(tempDir.path, pdfFilename);
+
+      // Persist the full JSON wrapper for debugging / future use.
+      final jsonBytes = utf8.encode(jsonEncode(effectiveResponseJson));
+      await File(jsonPath).writeAsBytes(jsonBytes, flush: true);
+      await File(pdfPath).writeAsBytes(result.pdfBytes, flush: true);
+
+      final jsonSize = await File(jsonPath).length();
+      final pdfSize = await File(pdfPath).length();
+
+      ref.read(composeControllerProvider.notifier).addLocalAttachments([
+            AttachmentRef(
+              id: 'r1:$timestamp:json',
+              fileName: jsonFilename,
+              filePath: jsonPath,
+              sizeBytes: jsonSize,
+              mimeType: 'application/json',
+            ),
+            AttachmentRef(
+              id: 'r1:$timestamp:pdf',
+              fileName: pdfFilename,
+              filePath: pdfPath,
+              sizeBytes: pdfSize,
+              mimeType: 'application/pdf',
+            ),
+          ]);
+
+      final draft = _extractDraft(result.json);
+      final draftSubject = (draft?['subject']?.toString() ?? '').trim();
+      final draftBody = (draft?['body']?.toString() ?? '').trim();
+
+      if (draftSubject.isNotEmpty || draftBody.isNotEmpty) {
+        if (draftSubject.isNotEmpty) {
+          _subjectController.text = draftSubject;
+        }
+        if (draftBody.isNotEmpty) {
+          _bodyController.text = draftBody;
+        }
+      } else {
+        final mapping = _r1SubjectAndBodyFromJson(effectiveReceiptJson);
+        if (mapping != null) {
+          _subjectController.text = mapping.subject;
+          _bodyController.text = mapping.body;
+        } else {
+          final ocrText = _extractOcrText(result.json);
+          if (ocrText.isNotEmpty) {
+            _bodyController.text = ocrText;
+          }
+        }
+      }
+    } on BackendMailApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.userMessage)),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to OCR receipt: $error')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _ocrRunning = false);
+      }
     }
   }
 
@@ -574,7 +721,196 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             ),
           ),
           if (_sending) const _SendingOverlay(),
+          if (_ocrRunning) const _BlockingOverlay(text: 'Processing R1…'),
         ],
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> _ensurePaymentSelectionIfMissing(
+    Map<String, dynamic> json,
+  ) async {
+    final payment = json['payment'];
+    final method =
+        payment is Map ? (payment['method']?.toString() ?? '').trim() : '';
+    final brand =
+        payment is Map ? (payment['card_brand']?.toString() ?? '').trim() : '';
+
+    final needsPrompt =
+        method.isEmpty || (method.toLowerCase() == 'card' && brand.isEmpty);
+    if (!needsPrompt) {
+      return json;
+    }
+
+    final selection = await showDialog<_R1PaymentSelection>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Način plaćanja'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Odaberi kako je račun plaćen.'),
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Gotovina'),
+              onTap: () =>
+                  Navigator.of(context).pop(_R1PaymentSelection.cash),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Visa'),
+              onTap: () =>
+                  Navigator.of(context).pop(_R1PaymentSelection.visa),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Mastercard'),
+              onTap: () =>
+                  Navigator.of(context).pop(_R1PaymentSelection.mastercard),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(null),
+            child: const Text('Preskoči'),
+          ),
+        ],
+        contentPadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+        actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      ),
+    );
+
+    // If user cancels or skips, keep original JSON (no payment line).
+    if (selection == null) {
+      return json;
+    }
+
+    final next = Map<String, dynamic>.from(json);
+    final nextPayment = payment is Map<String, dynamic>
+        ? Map<String, dynamic>.from(payment)
+        : <String, dynamic>{};
+    switch (selection) {
+      case _R1PaymentSelection.cash:
+        nextPayment['method'] = 'cash';
+        nextPayment.remove('card_brand');
+      case _R1PaymentSelection.visa:
+        nextPayment['method'] = 'card';
+        nextPayment['card_brand'] = 'Visa';
+      case _R1PaymentSelection.mastercard:
+        nextPayment['method'] = 'card';
+        nextPayment['card_brand'] = 'Mastercard';
+    }
+    next['payment'] = nextPayment;
+    return next;
+  }
+
+  Map<String, dynamic> _extractReceiptPayload(Map<String, dynamic> json) {
+    final receipt = json['receipt'];
+    if (receipt is Map<String, dynamic>) {
+      return receipt;
+    }
+    if (receipt is Map) {
+      return Map<String, dynamic>.from(receipt);
+    }
+    return json;
+  }
+
+  Map<String, dynamic>? _extractDraft(Map<String, dynamic> json) {
+    final draft = json['draft'];
+    if (draft is Map<String, dynamic>) {
+      return draft;
+    }
+    if (draft is Map) {
+      return Map<String, dynamic>.from(draft);
+    }
+    return null;
+  }
+
+  List<String> _extractWarnings(Map<String, dynamic> json) {
+    final raw = json['warnings'];
+    if (raw is List) {
+      return raw.map((e) => e.toString()).where((e) => e.trim().isNotEmpty).toList();
+    }
+    return const [];
+  }
+
+  String _extractOcrText(Map<String, dynamic> json) {
+    final raw = json['ocr_text'];
+    if (raw == null) {
+      return '';
+    }
+    final text = raw.toString().trim();
+    if (text.isEmpty) {
+      return '';
+    }
+    // Keep body bounded; user can open JSON attachment for full content.
+    const maxChars = 8000;
+    if (text.length <= maxChars) {
+      return text;
+    }
+    return '${text.substring(0, maxChars)}…';
+  }
+
+  Map<String, dynamic> _mergeReceiptIntoResponseJson(
+    Map<String, dynamic> responseJson,
+    Map<String, dynamic> effectiveReceipt,
+  ) {
+    if (!responseJson.containsKey('receipt')) {
+      return responseJson;
+    }
+    final next = Map<String, dynamic>.from(responseJson);
+    next['receipt'] = effectiveReceipt;
+    return next;
+  }
+}
+
+enum _R1PaymentSelection { cash, visa, mastercard }
+
+class _BlockingOverlay extends StatelessWidget {
+  const _BlockingOverlay({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: AbsorbPointer(
+        child: ColoredBox(
+          color: Colors.black54,
+          child: Center(
+            child: Material(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2.6),
+                    ),
+                    const SizedBox(width: 14),
+                    Text(
+                      text,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: const Color(0xFF20242A),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -738,6 +1074,10 @@ class _ComposeToolbar extends StatelessWidget {
                 const PopupMenuItem(
                   value: _ComposeMoreAction.confidentialMode,
                   child: Text('Confidential mode'),
+                ),
+                const PopupMenuItem(
+                  value: _ComposeMoreAction.r1Receipt,
+                  child: Text('R1 račun'),
                 ),
                 PopupMenuItem(
                   value: _ComposeMoreAction.saveDraft,
@@ -1054,9 +1394,232 @@ String _moreActionLabel(_ComposeMoreAction action) {
     _ComposeMoreAction.scheduleSend => 'Schedule send',
     _ComposeMoreAction.addFromContacts => 'Add from Contacts',
     _ComposeMoreAction.confidentialMode => 'Confidential mode',
+    _ComposeMoreAction.r1Receipt => 'R1 račun',
     _ComposeMoreAction.saveDraft => 'Save draft',
     _ComposeMoreAction.discard => 'Discard',
     _ComposeMoreAction.settings => 'Settings',
     _ComposeMoreAction.helpFeedback => 'Help & feedback',
   };
+}
+
+String _safeFilename(String value, {required String fallback}) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) {
+    return fallback;
+  }
+  final sanitized = trimmed.replaceAll(RegExp(r'[<>:"/\\|?*\u0000-\u001F]'), '_');
+  return sanitized.isEmpty ? fallback : sanitized;
+}
+
+class _R1Mapping {
+  const _R1Mapping({required this.subject, required this.body});
+
+  final String subject;
+  final String body;
+}
+
+_R1Mapping? _r1SubjectAndBodyFromJson(Map<String, dynamic> json) {
+  final sellerName = _stringAt(json, ['seller', 'name']).trim();
+  final sellerOib = _stringAt(json, ['seller', 'oib']).trim();
+  final documentType = _stringAt(json, ['invoice', 'document_type']).trim();
+  final invoiceNumber = _stringAt(json, ['invoice', 'number']).trim();
+  final issueDateRaw = _stringAt(json, ['invoice', 'issue_date']).trim();
+  final issueDateFormatted = _formatHrDate(issueDateRaw);
+  final currency = _stringAt(json, ['invoice', 'currency']).trim();
+
+  final subjectParts = [sellerName, documentType, invoiceNumber]
+      .where((p) => p.trim().isNotEmpty)
+      .toList();
+  if (subjectParts.isEmpty) {
+    return null;
+  }
+  final subject = subjectParts.join(' ');
+
+  final header = _compactSpaces(
+    [
+      'u prilogu je',
+      if (documentType.isNotEmpty) documentType,
+      if (invoiceNumber.isNotEmpty) invoiceNumber,
+      if (sellerName.isNotEmpty) 'dobavljača $sellerName',
+      if (sellerOib.isNotEmpty) 'OIB: $sellerOib',
+      if (issueDateFormatted.isNotEmpty) 'od datuma $issueDateFormatted',
+    ].join(' '),
+  );
+
+  final lines = _listAt(json, ['lines']);
+  final lineTexts = <String>[];
+  for (final line in lines) {
+    if (line is! Map<String, dynamic>) {
+      continue;
+    }
+    final desc = (line['description']?.toString() ?? '').trim();
+    final qty = (line['quantity_l']?.toString() ?? '').trim();
+    final unit = (line['unit_price']?.toString() ?? '').trim();
+    final net = (line['amount_net']?.toString() ?? '').trim();
+
+    final qtyWithUnit = qty.isEmpty ? '' : '$qty l';
+    final hasEquationParts =
+        qtyWithUnit.isNotEmpty || unit.isNotEmpty || net.isNotEmpty;
+    if (desc.isEmpty && !hasEquationParts) {
+      continue;
+    }
+    final unitWithCurrency = unit.isEmpty ? '' : _amountWithCurrency(unit, currency);
+    final netWithCurrency = net.isEmpty ? '' : _amountWithCurrency(net, currency);
+    final formatted = _compactSpaces(
+      [
+        if (desc.isNotEmpty) desc,
+        if (qtyWithUnit.isNotEmpty) qtyWithUnit,
+        if (unitWithCurrency.isNotEmpty) 'x $unitWithCurrency',
+        if (netWithCurrency.isNotEmpty) '= $netWithCurrency',
+      ].join(' '),
+    );
+    if (formatted.isNotEmpty) {
+      lineTexts.add(formatted);
+    }
+  }
+
+  final totalsNet = _stringAt(json, ['totals', 'net']).trim();
+  final totalsTax = _stringAt(json, ['totals', 'tax']).trim();
+  final totalsGross = _stringAt(json, ['totals', 'gross']).trim();
+  final paymentMethod = _stringAt(json, ['payment', 'method']).trim();
+  final cardBrand = _stringAt(json, ['payment', 'card_brand']).trim();
+
+  final buffer = StringBuffer()..writeln(header);
+  if (lineTexts.isNotEmpty) {
+    buffer.writeln();
+    for (final line in lineTexts) {
+      buffer.writeln(line);
+    }
+  }
+  if (totalsNet.isNotEmpty || totalsTax.isNotEmpty || totalsGross.isNotEmpty) {
+    buffer.writeln();
+    if (totalsNet.isNotEmpty) {
+      buffer.writeln('bez PDV  ${_amountWithCurrency(totalsNet, currency)}');
+    }
+    if (totalsTax.isNotEmpty) {
+      buffer.writeln('PDV  ${_amountWithCurrency(totalsTax, currency)}');
+    }
+    if (totalsGross.isNotEmpty) {
+      buffer.writeln(
+        'ukupno sa PDV  ${_amountWithCurrency(totalsGross, currency)}',
+      );
+    }
+  }
+
+  final paymentLine = _paymentLine(paymentMethod, cardBrand);
+  if (paymentLine.isNotEmpty) {
+    buffer.writeln();
+    buffer.writeln(paymentLine);
+  }
+
+  return _R1Mapping(subject: subject, body: buffer.toString().trim());
+}
+
+String _compactSpaces(String value) =>
+    value.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+String _formatHrDate(String raw) {
+  if (raw.trim().isEmpty) {
+    return '';
+  }
+  final parsed = DateTime.tryParse(raw.trim());
+  if (parsed == null) {
+    return raw.trim();
+  }
+  final day = parsed.day.toString().padLeft(2, '0');
+  final month = parsed.month.toString().padLeft(2, '0');
+  final year = parsed.year.toString();
+  return '$day.$month.$year';
+}
+
+String _amountWithCurrency(String amount, String currency) {
+  final a = amount.trim();
+  if (a.isEmpty) {
+    return '';
+  }
+  final c = currency.trim();
+  return c.isEmpty ? a : '$a $c';
+}
+
+String _paymentLine(String method, String cardBrand) {
+  final normalized = method.trim().toLowerCase();
+  if (normalized.isEmpty) {
+    return '';
+  }
+  final label = switch (normalized) {
+    'card' => 'karticom',
+    'cash' => 'gotovina',
+    'bank_transfer' => 'virman',
+    'transfer' => 'virman',
+    'wire' => 'virman',
+    _ => normalized,
+  };
+  final brand = _normalizeCardBrand(cardBrand);
+  final suffix = brand.isEmpty ? '' : ' ($brand)';
+  return 'Plaćeno $label$suffix';
+}
+
+String _normalizeCardBrand(String raw) {
+  final trimmed = raw.trim();
+  if (trimmed.isEmpty) {
+    return '';
+  }
+  final normalized = trimmed.toLowerCase().replaceAll(RegExp(r'[\s\-_]+'), '');
+  if (normalized == 'visa' || normalized.startsWith('visa')) {
+    return 'Visa';
+  }
+  if (normalized == 'mastercard' ||
+      normalized == 'master' ||
+      normalized == 'mc' ||
+      normalized.startsWith('mastercard')) {
+    return 'Mastercard';
+  }
+  if (normalized == 'maestro' || normalized.startsWith('maestro')) {
+    return 'Maestro';
+  }
+  if (normalized == 'amex' ||
+      normalized == 'americanexpress' ||
+      normalized.startsWith('americanexpress')) {
+    return 'Amex';
+  }
+  if (normalized == 'diners' ||
+      normalized == 'dinersclub' ||
+      normalized.startsWith('dinersclub')) {
+    return 'Diners';
+  }
+
+  // Fallback: keep user's value but TitleCase it.
+  return trimmed.isEmpty
+      ? ''
+      : '${trimmed[0].toUpperCase()}${trimmed.substring(1).toLowerCase()}';
+}
+
+String _stringAt(Map<String, dynamic> root, List<String> path) {
+  Object? current = root;
+  for (final key in path) {
+    if (current is Map<String, dynamic>) {
+      current = current[key];
+    } else {
+      return '';
+    }
+  }
+  if (current == null) {
+    return '';
+  }
+  return current.toString();
+}
+
+List<Object?> _listAt(Map<String, dynamic> root, List<String> path) {
+  Object? current = root;
+  for (final key in path) {
+    if (current is Map<String, dynamic>) {
+      current = current[key];
+    } else {
+      return const [];
+    }
+  }
+  if (current is List) {
+    return current;
+  }
+  return const [];
 }
