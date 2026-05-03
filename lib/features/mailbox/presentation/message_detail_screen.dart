@@ -24,6 +24,7 @@ import '../domain/entities/mail_thread.dart';
 import 'mailbox_controller.dart';
 import 'message_detail_route_result.dart';
 import 'message_translation_controller.dart';
+import 'pdf_attachment_viewer_screen.dart';
 
 const _screenBackground = Color(0xFFF7F8FC);
 const _mutedText = Color(0xFF5D636B);
@@ -496,12 +497,26 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
             attachment: attachment,
           );
       final file = await _saveAttachment(downloaded);
-      final openResult = await OpenFilex.open(
-        file.path,
-        type: downloaded.contentType,
-      );
-      if (openResult.type != ResultType.done) {
-        _showSnackBar(openResult.message);
+      if (_isPdfAttachment(downloaded, attachment) && !kIsWeb) {
+        if (!mounted) {
+          return;
+        }
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (context) => PdfAttachmentViewerScreen(
+              file: file,
+              title: attachment.filename,
+            ),
+          ),
+        );
+      } else {
+        final openResult = await OpenFilex.open(
+          file.path,
+          type: downloaded.contentType,
+        );
+        if (openResult.type != ResultType.done) {
+          _showSnackBar(openResult.message);
+        }
       }
     } catch (error) {
       _showSnackBar(error.toString());
@@ -530,6 +545,23 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
       return 'attachment.bin';
     }
     return sanitized;
+  }
+
+  bool _isPdfAttachment(
+    DownloadedMailAttachment downloaded,
+    MailMessageAttachment attachment,
+  ) {
+    bool looksPdf(String name, String contentType) {
+      final lowerName = name.toLowerCase();
+      final lowerType = contentType.toLowerCase();
+      if (lowerName.endsWith('.pdf')) {
+        return true;
+      }
+      return lowerType.contains('pdf');
+    }
+
+    return looksPdf(attachment.filename, attachment.contentType) ||
+        looksPdf(downloaded.filename, downloaded.contentType);
   }
 
   void _showSnackBar(String message) {
