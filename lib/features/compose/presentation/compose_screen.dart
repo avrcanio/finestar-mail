@@ -11,13 +11,14 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
+import '../../../core/constants/mail_translation_languages.dart';
 import '../../../data/remote/backend_mail_api_client.dart';
 import '../../contacts/domain/entities/contact_suggestion.dart';
 import '../../attachments/domain/entities/attachment_ref.dart';
 import '../../auth/presentation/auth_controller.dart';
-import '../../auth/data/backend_auth_token_selector.dart';
 import '../domain/entities/compose_attachment.dart';
 import '../domain/entities/reply_context.dart';
+import '../data/openai_compose_assist_service.dart';
 import '../domain/entities/share_compose_args.dart';
 import 'compose_controller.dart';
 
@@ -29,6 +30,10 @@ enum _ComposeMoreAction {
   scheduleSend,
   addFromContacts,
   confidentialMode,
+  aiFixGrammar,
+  aiImproveBody,
+  aiSuggestSubject,
+  translateSubjectBody,
   r1Receipt,
   saveDraft,
   discard,
@@ -353,6 +358,14 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   Future<void> _handleMoreAction(_ComposeMoreAction action) async {
     switch (action) {
+      case _ComposeMoreAction.aiFixGrammar:
+        await _openAiAssist(OpenAiComposeAssistKind.fixGrammar);
+      case _ComposeMoreAction.aiImproveBody:
+        await _openAiAssist(OpenAiComposeAssistKind.improveBody);
+      case _ComposeMoreAction.aiSuggestSubject:
+        await _openAiAssist(OpenAiComposeAssistKind.suggestSubject);
+      case _ComposeMoreAction.translateSubjectBody:
+        await _translateComposeDraft();
       case _ComposeMoreAction.r1Receipt:
         await _handleR1Receipt();
       case _ComposeMoreAction.discard:
@@ -384,6 +397,239 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             ),
           );
         }
+    }
+  }
+
+  Future<void> _openAiAssist(OpenAiComposeAssistKind kind) async {
+    final body = _bodyController.text.trim();
+    if (body.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              kind == OpenAiComposeAssistKind.suggestSubject
+                  ? 'Write some message body to suggest a subject.'
+                  : 'Write some message body first.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    final service = ref.read(openAiComposeAssistServiceProvider);
+    if (!service.isConfigured) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Set OPENAI_API_KEY when running the app (--dart-define).',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+    final rootNav = Navigator.of(context, rootNavigator: true);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      useRootNavigator: true,
+      builder: (dialogContext) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 18),
+                Text('Working with AI…'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final result = await service.run(
+        kind: kind,
+        bodyText: _bodyController.text,
+        subjectText: _subjectController.text,
+      );
+      if (!mounted) {
+        return;
+      }
+      switch (kind) {
+        case OpenAiComposeAssistKind.fixGrammar:
+        case OpenAiComposeAssistKind.improveBody:
+          _bodyController.value = TextEditingValue(
+            text: result,
+            selection: TextSelection.collapsed(offset: result.length),
+          );
+        case OpenAiComposeAssistKind.suggestSubject:
+          _subjectController.value = TextEditingValue(
+            text: result,
+            selection: TextSelection.collapsed(offset: result.length),
+          );
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Updated from AI.')),
+      );
+    } on OpenAiComposeAssistException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('AI request failed: $e')),
+        );
+      }
+    } finally {
+      rootNav.pop();
+    }
+  }
+
+  Future<void> _translateComposeDraft() async {
+    final subject = _subjectController.text.trim();
+    final body = _bodyController.text.trim();
+    if (subject.isEmpty && body.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Add a subject or message body to translate.'),
+          ),
+        );
+      }
+      return;
+    }
+
+    final service = ref.read(openAiComposeAssistServiceProvider);
+    if (!service.isConfigured) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Set OPENAI_API_KEY when running the app (--dart-define).',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    final stored = await ref
+        .read(secureStorageServiceProvider)
+        .readMailTranslationTargetLanguage();
+    final normalized = stored?.trim();
+    final currentLang =
+        (normalized == null || normalized.isEmpty)
+            ? kMailTranslationDefaultLanguageCode
+            : normalized;
+
+    if (!mounted) {
+      return;
+    }
+
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('Translate subject & body to'),
+        children: [
+          for (final entry in kMailTranslationLanguageLabels.entries)
+            ListTile(
+              title: Text('${entry.value} (${entry.key})'),
+              trailing: entry.key == currentLang
+                  ? Icon(
+                      Icons.check,
+                      color: Theme.of(dialogContext).colorScheme.primary,
+                    )
+                  : null,
+              onTap: () => Navigator.of(dialogContext).pop(entry.key),
+            ),
+        ],
+      ),
+    );
+
+    if (!mounted || picked == null) {
+      return;
+    }
+
+    await ref
+        .read(secureStorageServiceProvider)
+        .saveMailTranslationTargetLanguage(picked);
+
+    if (!mounted) {
+      return;
+    }
+
+    final rootNav = Navigator.of(context, rootNavigator: true);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      useRootNavigator: true,
+      builder: (dialogContext) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 18),
+                Text('Translating…'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final result = await service.translateDraft(
+        subject: _subjectController.text,
+        body: _bodyController.text,
+        targetLanguageCode: picked,
+        targetLanguageEnglishLabel:
+            kMailTranslationLanguageLabels[picked] ?? picked,
+      );
+      if (!mounted) {
+        return;
+      }
+      _subjectController.value = TextEditingValue(
+        text: result.subject,
+        selection: TextSelection.collapsed(offset: result.subject.length),
+      );
+      _bodyController.value = TextEditingValue(
+        text: result.body,
+        selection: TextSelection.collapsed(offset: result.body.length),
+      );
+      final label = kMailTranslationLanguageLabels[picked] ?? picked;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Translated to $label.')),
+      );
+    } on OpenAiComposeAssistException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Translation failed: $e')),
+        );
+      }
+    } finally {
+      rootNav.pop();
     }
   }
 
@@ -1076,6 +1322,22 @@ class _ComposeToolbar extends StatelessWidget {
                   child: Text('Confidential mode'),
                 ),
                 const PopupMenuItem(
+                  value: _ComposeMoreAction.aiFixGrammar,
+                  child: Text('Fix grammar (AI)'),
+                ),
+                const PopupMenuItem(
+                  value: _ComposeMoreAction.aiImproveBody,
+                  child: Text('Improve message (AI)'),
+                ),
+                const PopupMenuItem(
+                  value: _ComposeMoreAction.aiSuggestSubject,
+                  child: Text('Suggest subject (AI)'),
+                ),
+                const PopupMenuItem(
+                  value: _ComposeMoreAction.translateSubjectBody,
+                  child: Text('Translate subject & body…'),
+                ),
+                const PopupMenuItem(
                   value: _ComposeMoreAction.r1Receipt,
                   child: Text('R1 račun'),
                 ),
@@ -1394,6 +1656,10 @@ String _moreActionLabel(_ComposeMoreAction action) {
     _ComposeMoreAction.scheduleSend => 'Schedule send',
     _ComposeMoreAction.addFromContacts => 'Add from Contacts',
     _ComposeMoreAction.confidentialMode => 'Confidential mode',
+    _ComposeMoreAction.aiFixGrammar => 'Fix grammar (AI)',
+    _ComposeMoreAction.aiImproveBody => 'Improve message (AI)',
+    _ComposeMoreAction.aiSuggestSubject => 'Suggest subject (AI)',
+    _ComposeMoreAction.translateSubjectBody => 'Translate subject & body',
     _ComposeMoreAction.r1Receipt => 'R1 račun',
     _ComposeMoreAction.saveDraft => 'Save draft',
     _ComposeMoreAction.discard => 'Discard',

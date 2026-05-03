@@ -27,6 +27,7 @@ class MailboxScreen extends ConsumerStatefulWidget {
 class _MailboxScreenState extends ConsumerState<MailboxScreen> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   final _searchController = TextEditingController();
+  final _mailListScrollController = ScrollController();
 
   Timer? _searchDebounce;
   String? _selectedFolderId;
@@ -35,9 +36,31 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
   final _locallyRemovedMessageIds = <String>{};
   final _expandedFolderPaths = <String>{};
   bool _isProcessingSelection = false;
+  bool _composeFabExtended = true;
+
+  static const _composeFabCollapseScrollPx = 12.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _mailListScrollController.addListener(_onMailListScroll);
+  }
+
+  void _onMailListScroll() {
+    if (!_mailListScrollController.hasClients) {
+      return;
+    }
+    final extend = _mailListScrollController.offset <=
+        _composeFabCollapseScrollPx;
+    if (extend != _composeFabExtended) {
+      setState(() => _composeFabExtended = extend);
+    }
+  }
 
   @override
   void dispose() {
+    _mailListScrollController.removeListener(_onMailListScroll);
+    _mailListScrollController.dispose();
     _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
@@ -217,10 +240,27 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
           Navigator.of(context).pop();
         },
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => context.push(AppRoute.compose.path),
-        icon: const Icon(Icons.edit_outlined),
-        label: const Text('Compose'),
+      floatingActionButton: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 200),
+        switchInCurve: Curves.easeOut,
+        switchOutCurve: Curves.easeIn,
+        transitionBuilder: (child, animation) => ScaleTransition(
+          scale: animation,
+          child: FadeTransition(opacity: animation, child: child),
+        ),
+        child: _composeFabExtended
+            ? FloatingActionButton.extended(
+                key: const ValueKey('compose_fab_extended'),
+                onPressed: () => context.push(AppRoute.compose.path),
+                icon: const Icon(Icons.edit_outlined),
+                label: const Text('Compose'),
+              )
+            : FloatingActionButton(
+                key: const ValueKey('compose_fab_compact'),
+                tooltip: 'Compose',
+                onPressed: () => context.push(AppRoute.compose.path),
+                child: const Icon(Icons.edit_outlined),
+              ),
       ),
       body: SafeArea(
         child: Column(
@@ -257,6 +297,7 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
                   : _MailboxContent(
                       folder: selectedFolder,
                       searchQuery: _searchQuery,
+                      scrollController: _mailListScrollController,
                       selectedMessageIds: _selectedMessageIds,
                       locallyRemovedMessageIds: _locallyRemovedMessageIds,
                       onToggleSelected: _toggleSelectedMessage,
@@ -854,6 +895,7 @@ class _MailboxContent extends ConsumerStatefulWidget {
   const _MailboxContent({
     required this.folder,
     required this.searchQuery,
+    required this.scrollController,
     required this.selectedMessageIds,
     required this.locallyRemovedMessageIds,
     required this.onToggleSelected,
@@ -862,6 +904,7 @@ class _MailboxContent extends ConsumerStatefulWidget {
 
   final MailFolder folder;
   final String searchQuery;
+  final ScrollController scrollController;
   final Set<String> selectedMessageIds;
   final Set<String> locallyRemovedMessageIds;
   final ValueChanged<String> onToggleSelected;
@@ -872,19 +915,17 @@ class _MailboxContent extends ConsumerStatefulWidget {
 }
 
 class _MailboxContentState extends ConsumerState<_MailboxContent> {
-  final _scrollController = ScrollController();
   final _expandedConversationIds = <String>{};
 
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_maybeLoadMore);
+    widget.scrollController.addListener(_maybeLoadMore);
   }
 
   @override
   void dispose() {
-    _scrollController.removeListener(_maybeLoadMore);
-    _scrollController.dispose();
+    widget.scrollController.removeListener(_maybeLoadMore);
     super.dispose();
   }
 
@@ -936,7 +977,7 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
                 .read(mailboxConversationsControllerProvider(folder).notifier)
                 .refresh(),
       child: ListView(
-        controller: _scrollController,
+        controller: widget.scrollController,
         padding: const EdgeInsets.fromLTRB(14, 8, 14, 96),
         children: [
           if (isSearching)

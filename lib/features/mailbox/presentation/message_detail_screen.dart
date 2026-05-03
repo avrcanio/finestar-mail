@@ -15,6 +15,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
+import '../../../core/constants/mail_translation_languages.dart';
 import '../../../core/widgets/state_views.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../../compose/domain/entities/reply_context.dart';
@@ -585,20 +586,10 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
     final picked = await showDialog<String>(
       context: context,
       builder: (dialogContext) {
-        const languages = <String, String>{
-          'hr': 'Croatian',
-          'en': 'English',
-          'es': 'Spanish',
-          'de': 'German',
-          'fr': 'French',
-          'it': 'Italian',
-          'pt': 'Portuguese',
-          'zh': 'Chinese',
-        };
         return SimpleDialog(
           title: const Text('Translate to'),
           children: [
-            for (final entry in languages.entries)
+            for (final entry in kMailTranslationLanguageLabels.entries)
               ListTile(
                 title: Text('${entry.value} (${entry.key})'),
                 trailing: entry.key == currentLanguage

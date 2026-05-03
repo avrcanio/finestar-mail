@@ -16,6 +16,7 @@ import '../features/auth/domain/repositories/auth_repository.dart';
 import '../features/contacts/data/contacts_repository_impl.dart';
 import '../features/contacts/domain/repositories/contacts_repository.dart';
 import '../features/compose/data/compose_repository_impl.dart';
+import '../features/compose/data/openai_compose_assist_service.dart';
 import '../features/compose/domain/repositories/compose_repository.dart';
 import '../features/mailbox/data/mailbox_repository_impl.dart';
 import '../features/mailbox/domain/repositories/mailbox_repository.dart';
@@ -180,6 +181,14 @@ final shareIntentServiceProvider = Provider<ShareIntentService>((ref) {
 
 final documentScannerServiceProvider = Provider<DocumentScannerService>((ref) {
   return DocumentScannerService();
+});
+
+final openAiComposeAssistServiceProvider =
+    Provider<OpenAiComposeAssistService>((ref) {
+  return OpenAiComposeAssistService(
+    apiKey: kOpenAiApiKeyFromEnvironment,
+    httpClient: ref.watch(httpClientProvider),
+  );
 });
 
 final deviceRegistrationServiceProvider = Provider<DeviceRegistrationService>((

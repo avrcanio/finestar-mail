@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
+import '../../../core/constants/mail_translation_languages.dart';
 import '../../auth/presentation/auth_controller.dart';
 import '../domain/entities/mail_message_translation.dart';
 
@@ -38,7 +39,7 @@ class MessageTranslationController extends AsyncNotifier<MessageTranslationState
 
   final String messageId;
 
-  static const fallbackLanguage = 'hr';
+  static const fallbackLanguage = kMailTranslationDefaultLanguageCode;
 
   @override
   Future<MessageTranslationState> build() async {
