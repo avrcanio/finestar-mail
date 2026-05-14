@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/theme/app_theme.dart';
 import '../features/auth/presentation/auth_controller.dart';
+import '../features/mailbox/domain/entities/mail_folder.dart';
 import '../features/mailbox/presentation/mailbox_controller.dart';
 import '../features/notifications/data/mail_notification_payload.dart';
 import '../features/notifications/presentation/in_app_mail_notification_controller.dart';
@@ -72,7 +73,36 @@ class _FinestarMailAppState extends ConsumerState<FinestarMailApp>
     if (state == AppLifecycleState.resumed) {
       _syncInboxForPayload(const MailNotificationPayload());
       ref.invalidate(accountSummariesProvider);
+      _refreshMailboxUnifiedOnResume();
     }
+  }
+
+  void _refreshMailboxUnifiedOnResume() {
+    final account = ref.read(activeAccountProvider).asData?.value;
+    if (account == null) {
+      return;
+    }
+    unawaited(() async {
+      try {
+        final folders = await ref
+            .read(mailboxRepositoryProvider)
+            .getFolders(account.id);
+        MailFolder? inbox;
+        for (final folder in folders) {
+          if (folder.isInbox || folder.path.trim().toUpperCase() == 'INBOX') {
+            inbox = folder;
+            break;
+          }
+        }
+        inbox ??= folders.isNotEmpty ? folders.first : null;
+        if (!mounted || inbox == null) {
+          return;
+        }
+        ref.invalidate(mailboxConversationsControllerProvider(inbox));
+      } catch (_) {
+        // Best-effort; next screen open will refetch.
+      }
+    }());
   }
 
   void _startNotificationListeners() {

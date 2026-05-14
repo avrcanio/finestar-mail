@@ -44,6 +44,38 @@ void main() {
     expect(response.folderCount, 5);
   });
 
+  test('setMessageReadState posts read flag and folder query', () async {
+    http.Request? capturedRequest;
+    final client = BackendMailApiClient(
+      httpClient: MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(
+          jsonEncode({
+            'account_email': 'app-test-1@finestar.hr',
+            'folder': 'INBOX',
+            'uid': '99',
+            'read': false,
+          }),
+          200,
+        );
+      }),
+      baseUrlLoader: () async => 'https://mail.example.test',
+    );
+
+    await client.setMessageReadState(
+      token: 'session-token',
+      folder: 'INBOX',
+      uid: '99',
+      read: false,
+    );
+
+    expect(capturedRequest?.method, 'POST');
+    expect(capturedRequest?.url.path, '/api/mail/messages/99/read-state');
+    expect(capturedRequest?.url.queryParameters, {'folder': 'INBOX'});
+    expect(jsonDecode(capturedRequest!.body), {'read': false});
+    expect(capturedRequest?.headers['Authorization'], 'Token session-token');
+  });
+
   test('authenticated endpoints send Authorization token header', () async {
     final paths = <String>[];
     final client = BackendMailApiClient(
@@ -376,7 +408,10 @@ void main() {
     );
 
     expect(capturedRequest?.url.path, '/api/mail/unified-conversations');
-    expect(capturedRequest?.url.queryParameters, {'limit': '50'});
+    expect(capturedRequest?.url.queryParameters, {
+      'limit': '50',
+      'offset': '0',
+    });
     expect(response.accountEmail, 'app-test-1@finestar.hr');
     expect(response.folders.map((folder) => folder.path), ['INBOX', 'Sent']);
     final conversation = response.conversations.single;

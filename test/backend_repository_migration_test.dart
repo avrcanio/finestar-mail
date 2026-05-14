@@ -785,7 +785,7 @@ void main() {
         backendMailApiClient: BackendMailApiClient(
           httpClient: MockClient((request) async {
             expect(request.url.path, '/api/mail/unified-conversations');
-            expect(request.url.queryParameters, {'limit': '50'});
+            expect(request.url.queryParameters, {'limit': '50', 'offset': '0'});
             return http.Response(
               jsonEncode({
                 'account_email': 'app-test-1@finestar.hr',
@@ -1406,7 +1406,7 @@ void main() {
         backendMailApiClient: BackendMailApiClient(
           httpClient: MockClient((request) async {
             expect(request.url.path, '/api/mail/unified-conversations');
-            expect(request.url.queryParameters, {'limit': '50'});
+            expect(request.url.queryParameters, {'limit': '50', 'offset': '0'});
             return http.Response(
               jsonEncode({
                 'account_email': 'app-test-1@finestar.hr',
@@ -1474,10 +1474,11 @@ void main() {
         path: 'INBOX',
         isInbox: true,
       );
-      final conversations = await repository.getConversations(
+      final page = await repository.getConversations(
         accountId: 'app-test-1@finestar.hr',
         folder: folder,
       );
+      final conversations = page.conversations;
 
       expect(conversations.single.id, 'thread-1');
       expect(conversations.single.rootMessage.id, endsWith(':api:40'));

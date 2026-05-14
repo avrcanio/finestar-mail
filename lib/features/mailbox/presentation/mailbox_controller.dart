@@ -11,6 +11,8 @@ import '../domain/entities/mail_message_summary.dart';
 import '../domain/entities/mail_restore_result.dart';
 import '../domain/entities/mail_thread.dart';
 
+const Object _unchanged = Object();
+
 final foldersProvider = FutureProvider<List<MailFolder>>((ref) {
   final account = ref.watch(activeAccountProvider).asData?.value;
   if (account == null) {
@@ -66,13 +68,35 @@ final mailboxConversationsControllerProvider = AsyncNotifierProvider.autoDispose
     >(MailboxConversationsController.new);
 
 class MailboxConversationsState {
-  const MailboxConversationsState({required this.conversations});
+  const MailboxConversationsState({
+    required this.conversations,
+    this.hasMore = false,
+    this.nextOffset = 0,
+    this.isLoadingMore = false,
+    this.loadMoreError,
+  });
 
   final List<MailConversation> conversations;
+  final bool hasMore;
+  final int nextOffset;
+  final bool isLoadingMore;
+  final String? loadMoreError;
 
-  MailboxConversationsState copyWith({List<MailConversation>? conversations}) {
+  MailboxConversationsState copyWith({
+    List<MailConversation>? conversations,
+    bool? hasMore,
+    int? nextOffset,
+    bool? isLoadingMore,
+    Object? loadMoreError = _unchanged,
+  }) {
     return MailboxConversationsState(
       conversations: conversations ?? this.conversations,
+      hasMore: hasMore ?? this.hasMore,
+      nextOffset: nextOffset ?? this.nextOffset,
+      isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+      loadMoreError: loadMoreError == _unchanged
+          ? this.loadMoreError
+          : loadMoreError as String?,
     );
   }
 }
@@ -114,6 +138,32 @@ class MailboxConversationsController
     );
   }
 
+  void applyMessageReadState(String messageId, bool isRead) {
+    final current = state.asData?.value;
+    if (current == null) {
+      return;
+    }
+    var changed = false;
+    final next = <MailConversation>[];
+    for (final conversation in current.conversations) {
+      final patched = MailboxDeleteStateRemoval.patchConversationReadState(
+        conversation,
+        messageId,
+        isRead,
+      );
+      if (patched != null) {
+        changed = true;
+        next.add(patched);
+      } else {
+        next.add(conversation);
+      }
+    }
+    if (!changed) {
+      return;
+    }
+    state = AsyncData(current.copyWith(conversations: next));
+  }
+
   Future<MailDeleteResult> moveSelectedToTrash(List<String> messageIds) async {
     final current = state.asData?.value;
     if (current == null || messageIds.isEmpty) {
@@ -150,6 +200,49 @@ class MailboxConversationsController
         for (final result in results) ...result.movedMessageIds,
       ],
       failed: [for (final result in results) ...result.failed],
+    );
+    removeMessagesFromState(result.movedMessageIds);
+    return result;
+  }
+
+  Future<MailDeleteResult> moveSelectedToArchive(
+    List<String> messageIds,
+    String archivePath,
+  ) async {
+    final current = state.asData?.value;
+    if (current == null || messageIds.isEmpty) {
+      return const MailDeleteResult(movedMessageIds: [], failed: []);
+    }
+
+    final account = await ref.read(activeAccountProvider.future);
+    if (account == null) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: messageIds
+            .map(
+              (id) => MailDeleteFailure(
+                messageId: id,
+                message: 'Active account session is missing.',
+              ),
+            )
+            .toList(),
+      );
+    }
+
+    final repository = ref.read(mailboxRepositoryProvider);
+    final results = <MailDeleteResult>[];
+    for (final messageId in messageIds) {
+      results.add(
+        await repository.moveMessageToFolder(
+          accountId: account.id,
+          messageId: messageId,
+          targetFolderPath: archivePath,
+        ),
+      );
+    }
+    final result = MailDeleteResult(
+      movedMessageIds: [for (final r in results) ...r.movedMessageIds],
+      failed: [for (final r in results) ...r.failed],
     );
     removeMessagesFromState(result.movedMessageIds);
     return result;
@@ -215,15 +308,69 @@ class MailboxConversationsController
       return const MailboxConversationsState(conversations: []);
     }
 
-    final conversations = await ref
+    final page = await ref
         .watch(mailboxRepositoryProvider)
         .getConversations(
           accountId: account.id,
           folder: folder,
           limit: limit,
+          offset: 0,
           forceRefresh: forceRefresh,
         );
-    return MailboxConversationsState(conversations: conversations);
+    return MailboxConversationsState(
+      conversations: page.conversations,
+      hasMore: page.hasMore,
+      nextOffset: page.nextOffset,
+    );
+  }
+
+  Future<void> loadMore() async {
+    final asyncState = state;
+    final current = asyncState.asData?.value;
+    if (current == null || current.isLoadingMore || !current.hasMore) {
+      return;
+    }
+
+    state = AsyncData(
+      current.copyWith(isLoadingMore: true, loadMoreError: null),
+    );
+
+    try {
+      final account = await ref.read(activeAccountProvider.future);
+      if (account == null) {
+        state = AsyncData(
+          current.copyWith(isLoadingMore: false, loadMoreError: null),
+        );
+        return;
+      }
+
+      final page = await ref
+          .read(mailboxRepositoryProvider)
+          .getConversations(
+            accountId: account.id,
+            folder: folder,
+            limit: limit,
+            offset: current.nextOffset,
+            forceRefresh: false,
+          );
+      final existingIds = current.conversations.map((c) => c.id).toSet();
+      final appended = page.conversations
+          .where((c) => existingIds.add(c.id))
+          .toList();
+      state = AsyncData(
+        current.copyWith(
+          conversations: [...current.conversations, ...appended],
+          hasMore: page.hasMore,
+          nextOffset: page.nextOffset,
+          isLoadingMore: false,
+          loadMoreError: null,
+        ),
+      );
+    } catch (error) {
+      state = AsyncData(
+        current.copyWith(isLoadingMore: false, loadMoreError: error.toString()),
+      );
+    }
   }
 }
 
@@ -295,6 +442,27 @@ class MailboxMessagesController extends AsyncNotifier<MailboxMessagesState> {
         ),
       ),
     );
+  }
+
+  void applyMessageReadState(String messageId, bool isRead) {
+    final current = state.asData?.value;
+    if (current == null) {
+      return;
+    }
+    var changed = false;
+    final next = <MailMessageSummary>[];
+    for (final message in current.messages) {
+      if (message.id == messageId) {
+        changed = true;
+        next.add(message.copyWith(isRead: isRead));
+      } else {
+        next.add(message);
+      }
+    }
+    if (!changed) {
+      return;
+    }
+    state = AsyncData(current.copyWith(messages: next));
   }
 
   Future<void> loadMore() async {
@@ -447,10 +615,98 @@ class MailboxMessagesController extends AsyncNotifier<MailboxMessagesState> {
   }
 }
 
-const Object _unchanged = Object();
-
 class MailboxDeleteStateRemoval {
   const MailboxDeleteStateRemoval._();
+
+  static MailConversation? patchConversationReadState(
+    MailConversation conversation,
+    String messageId,
+    bool isRead,
+  ) {
+    MailMessageSummary withRead(MailMessageSummary summary) {
+      return summary.id == messageId
+          ? summary.copyWith(isRead: isRead)
+          : summary;
+    }
+
+    if (conversation.timelineMessages.isNotEmpty) {
+      var touched = false;
+      final newTimeline = <MailConversationMessage>[];
+      for (final entry in conversation.timelineMessages) {
+        if (entry.message.id == messageId) {
+          touched = true;
+          newTimeline.add(
+            MailConversationMessage(
+              message: entry.message.copyWith(isRead: isRead),
+              direction: entry.direction,
+            ),
+          );
+        } else {
+          newTimeline.add(entry);
+        }
+      }
+      if (!touched) {
+        return null;
+      }
+      final hasUnread = newTimeline.any(
+        (entry) =>
+            entry.direction == MailConversationDirection.inbound &&
+            !entry.message.isRead,
+      );
+      final newRoot = newTimeline.first.message;
+      final newReplies =
+          newTimeline.skip(1).map((entry) => entry.message).toList();
+      return MailConversation(
+        id: conversation.id,
+        messageCount: conversation.messageCount,
+        replyCount: conversation.replyCount,
+        hasUnread: hasUnread,
+        hasAttachments: conversation.hasAttachments,
+        hasVisibleAttachments: conversation.hasVisibleAttachments,
+        participants: conversation.participants,
+        rootMessage: newRoot,
+        replies: newReplies,
+        latestDate: conversation.latestDate,
+        timelineMessages: newTimeline,
+      );
+    }
+
+    final rootTouched = conversation.rootMessage.id == messageId;
+    final newRoot = withRead(conversation.rootMessage);
+    final newReplies = conversation.replies.map(withRead).toList();
+    final replyTouched = conversation.replies.any((r) => r.id == messageId);
+    if (!rootTouched && !replyTouched) {
+      return null;
+    }
+    final synthetic = <MailConversationMessage>[
+      MailConversationMessage(
+        message: newRoot,
+        direction: MailConversationDirection.inbound,
+      ),
+      for (final reply in newReplies)
+        MailConversationMessage(
+          message: reply,
+          direction: MailConversationDirection.inbound,
+        ),
+    ];
+    final hasUnread = synthetic.any(
+      (entry) =>
+          entry.direction == MailConversationDirection.inbound &&
+          !entry.message.isRead,
+    );
+    return MailConversation(
+      id: conversation.id,
+      messageCount: conversation.messageCount,
+      replyCount: conversation.replyCount,
+      hasUnread: hasUnread,
+      hasAttachments: conversation.hasAttachments,
+      hasVisibleAttachments: conversation.hasVisibleAttachments,
+      participants: conversation.participants,
+      rootMessage: newRoot,
+      replies: newReplies,
+      latestDate: conversation.latestDate,
+    );
+  }
 
   static List<MailMessageSummary> removeFromMessages(
     List<MailMessageSummary> messages,

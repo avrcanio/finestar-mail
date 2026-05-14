@@ -8,6 +8,7 @@ import 'package:finestar_mail/features/compose/domain/entities/reply_context.dar
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_delete_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_conversation.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_conversations_page.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_attachment.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
@@ -19,10 +20,15 @@ import 'package:finestar_mail/features/mailbox/domain/repositories/mailbox_repos
 import 'package:finestar_mail/features/mailbox/presentation/message_detail_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  setUpAll(() {
+    FlutterSecureStorage.setMockInitialValues({});
+  });
+
   testWidgets('message detail renders chronological thread content', (
     tester,
   ) async {
@@ -605,7 +611,7 @@ void main() {
     expect(find.text('Inbox route reached'), findsOneWidget);
   });
 
-  testWidgets('per-message menu shows coming soon actions without applying', (
+  testWidgets('per-message menu reply forward and mark unread work', (
     tester,
   ) async {
     final repository = _FakeMailboxRepository();
@@ -615,18 +621,83 @@ void main() {
     await tester.tap(find.byTooltip('Message options').first);
     await tester.pumpAndSettle();
 
-    expect(find.text('Reply (Coming soon)'), findsOneWidget);
-    expect(find.text('Forward (Coming soon)'), findsOneWidget);
-    expect(find.text('Archive (Coming soon)'), findsOneWidget);
-    expect(find.text('Mark unread (Coming soon)'), findsOneWidget);
-    expect(find.text('Move (Coming soon)'), findsOneWidget);
+    expect(find.text('Reply'), findsOneWidget);
+    expect(find.text('Forward'), findsOneWidget);
+    expect(find.text('Mark unread'), findsOneWidget);
+    expect(find.text('Archive'), findsOneWidget);
+    expect(find.text('Move'), findsOneWidget);
     expect(find.text('Move to Trash'), findsOneWidget);
 
-    await tester.tap(find.text('Reply (Coming soon)'));
+    await tester.tap(find.text('Reply'));
     await tester.pumpAndSettle();
 
-    expect(repository.deletedMessageIds, isEmpty);
-    expect(find.text('Reply (Coming soon)'), findsOneWidget);
+    expect(
+      find.text('reply:${_firstMessage.id}:${_firstMessage.sender}:::'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Message options').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Forward'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('forward:${_firstMessage.id}::INBOX:42:pdf_1'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Message options').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mark unread'));
+    await tester.pumpAndSettle();
+
+    expect(repository.markedUnreadMessageIds, contains(_firstMessage.id));
+    expect(find.text('Marked as unread.'), findsOneWidget);
+  });
+
+  testWidgets('per-message move opens folder picker and moves message', (
+    tester,
+  ) async {
+    final folders = [
+      const MailFolder(
+        id: 'inbox',
+        name: 'INBOX',
+        path: 'INBOX',
+        isInbox: true,
+      ),
+      const MailFolder(
+        id: 'archive',
+        name: 'Archive',
+        path: 'Archive',
+        isInbox: false,
+        displayName: 'Saved mail',
+      ),
+    ];
+    final repository = _FakeMailboxRepository(folders: folders);
+    await tester.pumpWidget(_buildTestApp(repository: repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Message options').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Move'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Move to folder'), findsOneWidget);
+    await tester.tap(find.text('Saved mail'));
+    await tester.pumpAndSettle();
+
+    expect(
+      repository.movedFolderByMessageId[_firstMessage.id],
+      'Archive',
+    );
+    expect(find.text(_firstMessage.visibleBody), findsNothing);
+    expect(find.text(_secondMessage.visibleBody), findsOneWidget);
   });
 
   testWidgets(
@@ -826,6 +897,7 @@ final _secondMessage = MailThreadMessage(
   id: 'message-2',
   folderId: 'avrcan@finestar.hr:sent',
   folderName: 'Sent',
+  folderPath: 'Sent',
   subject: 'Re: probni mail',
   sender: 'avrcan@finestar.hr',
   recipients: const ['ante@vitalgroupsa.com'],
@@ -869,17 +941,30 @@ class _FakeMailboxRepository implements MailboxRepository {
   _FakeMailboxRepository({
     MailThread? thread,
     Set<String> failingDeleteIds = const {},
+    List<MailFolder> folders = const [],
+    List<String> recentMoveDestinationPaths = const [],
   }) : _currentThread = thread ?? _thread,
-       _failingDeleteIds = failingDeleteIds;
+       _failingDeleteIds = failingDeleteIds,
+       _folders = folders,
+       _recentMoveDestinationPaths = recentMoveDestinationPaths;
 
   final MailThread _currentThread;
   final Set<String> _failingDeleteIds;
+  final List<MailFolder> _folders;
+  final List<String> _recentMoveDestinationPaths;
   final markedReadMessageIds = <String>[];
+  final markedUnreadMessageIds = <String>[];
   final deletedMessageIds = <String>[];
   final restoredMessageIds = <String>[];
+  final movedFolderByMessageId = <String, String>{};
 
   @override
-  Future<List<MailFolder>> getFolders(String accountId) async => const [];
+  Future<List<MailFolder>> getFolders(String accountId) async =>
+      List<MailFolder>.from(_folders);
+
+  @override
+  List<String> getRecentMoveDestinationPaths(String accountId) =>
+      List<String>.from(_recentMoveDestinationPaths);
 
   @override
   Future<List<MailMessageSummary>> getInbox({
@@ -952,12 +1037,14 @@ class _FakeMailboxRepository implements MailboxRepository {
   }) async => const [];
 
   @override
-  Future<List<MailConversation>> getConversations({
+  Future<MailConversationsPage> getConversations({
     required String accountId,
     required MailFolder folder,
     int limit = 50,
+    int offset = 0,
     bool forceRefresh = false,
-  }) async => const [];
+  }) async =>
+      const MailConversationsPage(conversations: [], hasMore: false, nextOffset: 0);
 
   @override
   Future<MailDeleteResult> moveMessagesToTrash({
@@ -1000,6 +1087,16 @@ class _FakeMailboxRepository implements MailboxRepository {
         ],
       );
     }
+    return MailDeleteResult(movedMessageIds: [messageId], failed: const []);
+  }
+
+  @override
+  Future<MailDeleteResult> moveMessageToFolder({
+    required String accountId,
+    required String messageId,
+    required String targetFolderPath,
+  }) async {
+    movedFolderByMessageId[messageId] = targetFolderPath;
     return MailDeleteResult(movedMessageIds: [messageId], failed: const []);
   }
 
@@ -1050,6 +1147,8 @@ class _FakeMailboxRepository implements MailboxRepository {
   }) async {
     if (isRead) {
       markedReadMessageIds.add(messageId);
+    } else {
+      markedUnreadMessageIds.add(messageId);
     }
   }
 

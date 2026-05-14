@@ -24,4 +24,32 @@ class MailMessageSummary {
   final int sequence;
   final bool isImportant;
   final bool isPinned;
+
+  MailMessageSummary copyWith({
+    String? id,
+    String? folderId,
+    String? subject,
+    String? sender,
+    String? preview,
+    DateTime? receivedAt,
+    bool? isRead,
+    bool? hasAttachments,
+    int? sequence,
+    bool? isImportant,
+    bool? isPinned,
+  }) {
+    return MailMessageSummary(
+      id: id ?? this.id,
+      folderId: folderId ?? this.folderId,
+      subject: subject ?? this.subject,
+      sender: sender ?? this.sender,
+      preview: preview ?? this.preview,
+      receivedAt: receivedAt ?? this.receivedAt,
+      isRead: isRead ?? this.isRead,
+      hasAttachments: hasAttachments ?? this.hasAttachments,
+      sequence: sequence ?? this.sequence,
+      isImportant: isImportant ?? this.isImportant,
+      isPinned: isPinned ?? this.isPinned,
+    );
+  }
 }

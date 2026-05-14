@@ -3,6 +3,7 @@ import 'package:finestar_mail/features/auth/domain/entities/mail_account.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_delete_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_conversation.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_conversations_page.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_attachment.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
@@ -199,6 +200,9 @@ class _FakeMailboxRepository implements MailboxRepository {
   Future<List<MailFolder>> getFolders(String accountId) async => const [];
 
   @override
+  List<String> getRecentMoveDestinationPaths(String accountId) => const [];
+
+  @override
   Future<List<MailMessageSummary>> getMessages({
     required String accountId,
     required MailFolder folder,
@@ -208,12 +212,14 @@ class _FakeMailboxRepository implements MailboxRepository {
   }) async => const [];
 
   @override
-  Future<List<MailConversation>> getConversations({
+  Future<MailConversationsPage> getConversations({
     required String accountId,
     required MailFolder folder,
     int limit = 50,
+    int offset = 0,
     bool forceRefresh = false,
-  }) async => const [];
+  }) async =>
+      const MailConversationsPage(conversations: [], hasMore: false, nextOffset: 0);
 
   @override
   Future<MailMessagePage> getMessagePage({
@@ -283,6 +289,13 @@ class _FakeMailboxRepository implements MailboxRepository {
   Future<MailDeleteResult> moveMessageToTrash({
     required String accountId,
     required String messageId,
+  }) async => const MailDeleteResult(movedMessageIds: [], failed: []);
+
+  @override
+  Future<MailDeleteResult> moveMessageToFolder({
+    required String accountId,
+    required String messageId,
+    required String targetFolderPath,
   }) async => const MailDeleteResult(movedMessageIds: [], failed: []);
 
   @override

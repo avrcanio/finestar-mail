@@ -114,11 +114,12 @@ class BackendMailApiClient {
   Future<BackendUnifiedConversationsResponse> unifiedConversations({
     required String token,
     required int limit,
+    int offset = 0,
   }) async {
     final json = await _requestJson(
       method: 'GET',
       path: '/api/mail/unified-conversations',
-      queryParameters: {'limit': '$limit'},
+      queryParameters: {'limit': '$limit', 'offset': '$offset'},
       token: token,
     );
     return BackendUnifiedConversationsResponse.fromJson(json);
@@ -138,6 +139,22 @@ class BackendMailApiClient {
     return BackendMessageDetailResponse.fromJson(json);
   }
 
+  Future<void> setMessageReadState({
+    required String token,
+    required String folder,
+    required String uid,
+    required bool read,
+  }) async {
+    await _requestJson(
+      method: 'POST',
+      path:
+          '/api/mail/messages/${Uri.encodeComponent(uid.trim())}/read-state',
+      queryParameters: {'folder': folder},
+      token: token,
+      body: {'read': read},
+    );
+  }
+
   Future<BackendMessageTranslationResponse> translateMessage({
     required String token,
     required String folder,
@@ -148,10 +165,7 @@ class BackendMailApiClient {
       method: 'POST',
       path: '/api/mail/messages/${Uri.encodeComponent(uid)}/translate',
       token: token,
-      body: {
-        'folder': folder,
-        'target_language': targetLanguage.trim(),
-      },
+      body: {'folder': folder, 'target_language': targetLanguage.trim()},
       requestTimeout: const Duration(seconds: 70),
     );
     return BackendMessageTranslationResponse.fromJson(json);
@@ -310,6 +324,22 @@ class BackendMailApiClient {
       token: token,
     );
     return BackendDeleteResponse.fromJson(json);
+  }
+
+  Future<BackendMoveResponse> moveMessage({
+    required String token,
+    required String folder,
+    required String uid,
+    required String targetFolder,
+  }) async {
+    final json = await _requestJson(
+      method: 'POST',
+      path: '/api/mail/messages/${Uri.encodeComponent(uid)}/move',
+      queryParameters: {'folder': folder},
+      token: token,
+      body: {'target_folder': targetFolder.trim()},
+    );
+    return BackendMoveResponse.fromJson(json);
   }
 
   Future<BackendRestoreResponse> restoreMessages({
@@ -538,7 +568,9 @@ String? _boundaryFromMultipartContentType(String value) {
   }
   var boundary = boundaryMatch.group(1) ?? '';
   boundary = boundary.trim();
-  if (boundary.startsWith('"') && boundary.endsWith('"') && boundary.length > 1) {
+  if (boundary.startsWith('"') &&
+      boundary.endsWith('"') &&
+      boundary.length > 1) {
     boundary = boundary.substring(1, boundary.length - 1);
   }
   return boundary.isEmpty ? null : boundary;
@@ -623,7 +655,9 @@ String? _headerValue(String rawHeaders, String headerName) {
 
 List<int> _trimLeadingCrlf(List<int> bytes) {
   var start = 0;
-  while (start + 1 < bytes.length && bytes[start] == 13 && bytes[start + 1] == 10) {
+  while (start + 1 < bytes.length &&
+      bytes[start] == 13 &&
+      bytes[start + 1] == 10) {
     start += 2;
   }
   return start == 0 ? bytes : bytes.sublist(start);
@@ -693,6 +727,9 @@ class BackendMailApiException implements Exception {
         currentCode == 'empty_uid_list' ||
         currentCode == 'invalid_uid') {
       return 'The mailbox action request was invalid.';
+    }
+    if (currentCode == 'invalid_read_state') {
+      return 'The read state request was invalid.';
     }
     if (currentCode == 'delete_from_trash_not_supported') {
       return 'Messages in Trash cannot be deleted from the app yet.';
@@ -884,10 +921,12 @@ class BackendFoldersResponse {
   const BackendFoldersResponse({
     required this.accountEmail,
     required this.folders,
+    this.recentMoveDestinations = const [],
   });
 
   final String accountEmail;
   final List<BackendFolderDto> folders;
+  final List<String> recentMoveDestinations;
 
   factory BackendFoldersResponse.fromJson(Map<String, dynamic> json) {
     return BackendFoldersResponse(
@@ -895,6 +934,7 @@ class BackendFoldersResponse {
       folders: _listOfObjects(
         json['folders'],
       ).map(BackendFolderDto.fromJson).toList(),
+      recentMoveDestinations: _listOfStrings(json['recent_move_destinations']),
     );
   }
 }
@@ -1051,11 +1091,15 @@ class BackendUnifiedConversationsResponse {
     required this.accountEmail,
     required this.folders,
     required this.conversations,
+    this.hasMore = false,
+    this.nextOffset = 0,
   });
 
   final String accountEmail;
   final List<BackendFolderDto> folders;
   final List<BackendUnifiedConversationDto> conversations;
+  final bool hasMore;
+  final int nextOffset;
 
   factory BackendUnifiedConversationsResponse.fromJson(
     Map<String, dynamic> json,
@@ -1068,6 +1112,10 @@ class BackendUnifiedConversationsResponse {
       conversations: _listOfObjects(
         json['conversations'],
       ).map(BackendUnifiedConversationDto.fromJson).toList(),
+      hasMore: json['has_more'] as bool? ?? false,
+      nextOffset: json['next_offset'] is num
+          ? (json['next_offset'] as num).toInt()
+          : int.tryParse('${json['next_offset'] ?? 0}') ?? 0,
     );
   }
 }
@@ -1433,6 +1481,40 @@ class BackendDeleteResponse {
   }
 }
 
+class BackendMoveResponse {
+  const BackendMoveResponse({
+    required this.accountEmail,
+    required this.folder,
+    required this.targetFolder,
+    required this.success,
+    required this.partial,
+    required this.moved,
+    required this.failed,
+  });
+
+  final String accountEmail;
+  final String folder;
+  final String targetFolder;
+  final bool success;
+  final bool partial;
+  final List<String> moved;
+  final List<BackendDeleteFailureDto> failed;
+
+  factory BackendMoveResponse.fromJson(Map<String, dynamic> json) {
+    return BackendMoveResponse(
+      accountEmail: json['account_email'] as String? ?? '',
+      folder: json['folder'] as String? ?? '',
+      targetFolder: json['target_folder'] as String? ?? '',
+      success: json['success'] as bool? ?? false,
+      partial: json['partial'] as bool? ?? false,
+      moved: _listOfStrings(json['moved']),
+      failed: _listOfObjects(
+        json['failed'],
+      ).map(BackendDeleteFailureDto.fromJson).toList(),
+    );
+  }
+}
+
 class BackendDeleteFailureDto {
   const BackendDeleteFailureDto({
     required this.uid,
@@ -1516,7 +1598,9 @@ class BackendMessageTranslationResponse {
   final bool truncated;
   final String model;
 
-  factory BackendMessageTranslationResponse.fromJson(Map<String, dynamic> json) {
+  factory BackendMessageTranslationResponse.fromJson(
+    Map<String, dynamic> json,
+  ) {
     return BackendMessageTranslationResponse(
       accountEmail: json['account_email'] as String? ?? '',
       folder: json['folder'] as String? ?? 'INBOX',

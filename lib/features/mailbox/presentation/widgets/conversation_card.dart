@@ -1,6 +1,7 @@
 import 'package:finestar_mail/core/widgets/section_card.dart';
 import 'package:flutter/material.dart';
 
+import '../../domain/archive_folder.dart';
 import '../../domain/entities/mail_conversation.dart';
 import '../../domain/entities/mail_folder.dart';
 import '../../domain/entities/mail_message_summary.dart';
@@ -24,6 +25,10 @@ class ConversationCard extends StatelessWidget {
     required this.onToggleSelected,
     required this.onDeletedMessages,
     required this.onShowActions,
+    this.listSwipeEnabled = false,
+    this.listSwipeArchiveEnabled = false,
+    this.onSwipeTrashMessages,
+    this.onSwipeArchiveMessages,
   });
 
   final MailConversation conversation;
@@ -35,6 +40,10 @@ class ConversationCard extends StatelessWidget {
   final ValueChanged<String> onToggleSelected;
   final ValueChanged<Set<String>> onDeletedMessages;
   final MessageActionCallback onShowActions;
+  final bool listSwipeEnabled;
+  final bool listSwipeArchiveEnabled;
+  final Future<void> Function(List<String> messageIds)? onSwipeTrashMessages;
+  final Future<void> Function(List<String> messageIds)? onSwipeArchiveMessages;
 
   @override
   Widget build(BuildContext context) {
@@ -62,6 +71,10 @@ class ConversationCard extends StatelessWidget {
         onToggleSelected: onToggleSelected,
         onDeletedMessages: onDeletedMessages,
         onShowActions: onShowActions,
+        listSwipeEnabled: listSwipeEnabled,
+        listSwipeArchiveEnabled: listSwipeArchiveEnabled,
+        onSwipeTrashMessages: onSwipeTrashMessages,
+        onSwipeArchiveMessages: onSwipeArchiveMessages,
       ),
     );
   }
@@ -81,6 +94,10 @@ class ConversationTimeline extends StatelessWidget {
     required this.onToggleSelected,
     required this.onDeletedMessages,
     required this.onShowActions,
+    this.listSwipeEnabled = false,
+    this.listSwipeArchiveEnabled = false,
+    this.onSwipeTrashMessages,
+    this.onSwipeArchiveMessages,
   });
 
   final MailConversation conversation;
@@ -94,6 +111,10 @@ class ConversationTimeline extends StatelessWidget {
   final ValueChanged<String> onToggleSelected;
   final ValueChanged<Set<String>> onDeletedMessages;
   final MessageActionCallback onShowActions;
+  final bool listSwipeEnabled;
+  final bool listSwipeArchiveEnabled;
+  final Future<void> Function(List<String> messageIds)? onSwipeTrashMessages;
+  final Future<void> Function(List<String> messageIds)? onSwipeArchiveMessages;
 
   @override
   Widget build(BuildContext context) {
@@ -120,6 +141,10 @@ class ConversationTimeline extends StatelessWidget {
             onToggleSelected: onToggleSelected,
             onDeletedMessages: onDeletedMessages,
             onShowActions: onShowActions,
+            listSwipeEnabled: listSwipeEnabled,
+            listSwipeArchiveEnabled: listSwipeArchiveEnabled,
+            onSwipeTrashMessages: onSwipeTrashMessages,
+            onSwipeArchiveMessages: onSwipeArchiveMessages,
             isRoot: identical(visibleItems[index], messages.first),
             isLast: index == visibleItems.length - 1,
             isLatestInConversation:
@@ -236,6 +261,10 @@ class ConversationTimelineItem extends StatelessWidget {
     required this.isRoot,
     required this.isLast,
     required this.isLatestInConversation,
+    this.listSwipeEnabled = false,
+    this.listSwipeArchiveEnabled = false,
+    this.onSwipeTrashMessages,
+    this.onSwipeArchiveMessages,
   });
 
   final MailConversation conversation;
@@ -249,10 +278,33 @@ class ConversationTimelineItem extends StatelessWidget {
   final bool isRoot;
   final bool isLast;
   final bool isLatestInConversation;
+  final bool listSwipeEnabled;
+  final bool listSwipeArchiveEnabled;
+  final Future<void> Function(List<String> messageIds)? onSwipeTrashMessages;
+  final Future<void> Function(List<String> messageIds)? onSwipeArchiveMessages;
 
   @override
   Widget build(BuildContext context) {
     final message = item.message;
+    var swipeIds = isRoot
+        ? messageIdsInConversationForFolder(conversation, folder).toList()
+        : const <String>[];
+    // Unified inbox can show Sent copies (folderId != current folder); still swipe this row.
+    if (isRoot && swipeIds.isEmpty) {
+      swipeIds = [message.id];
+    }
+    final canSwipeTrash =
+        isRoot &&
+        swipeIds.isNotEmpty &&
+        listSwipeEnabled &&
+        onSwipeTrashMessages != null;
+    final canSwipeArchive =
+        isRoot &&
+        swipeIds.isNotEmpty &&
+        listSwipeEnabled &&
+        listSwipeArchiveEnabled &&
+        onSwipeArchiveMessages != null;
+
     final tile = MailMessageListTile(
       message: message,
       folder: folder,
@@ -278,6 +330,14 @@ class ConversationTimelineItem extends StatelessWidget {
               direction: item.direction,
               isLatestInConversation: isLatestInConversation,
             )
+          : null,
+      slideActionsEnabled: canSwipeTrash || canSwipeArchive,
+      showArchiveSwipe: canSwipeArchive,
+      onSwipeDelete: canSwipeTrash
+          ? () => onSwipeTrashMessages!(swipeIds)
+          : null,
+      onSwipeArchive: canSwipeArchive
+          ? () => onSwipeArchiveMessages!(swipeIds)
           : null,
     );
 

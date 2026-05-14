@@ -6,6 +6,7 @@ import 'package:finestar_mail/features/auth/presentation/auth_controller.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_delete_result.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_folder.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_conversation.dart';
+import 'package:finestar_mail/features/mailbox/domain/entities/mail_conversations_page.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_attachment.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_detail.dart';
 import 'package:finestar_mail/features/mailbox/domain/entities/mail_message_page.dart';
@@ -978,6 +979,9 @@ class _FakeMailboxRepository implements MailboxRepository {
   ];
 
   @override
+  List<String> getRecentMoveDestinationPaths(String accountId) => const [];
+
+  @override
   Future<List<MailMessageSummary>> getInbox({
     required String accountId,
     int page = 0,
@@ -1046,15 +1050,30 @@ class _FakeMailboxRepository implements MailboxRepository {
   }
 
   @override
-  Future<List<MailConversation>> getConversations({
+  Future<MailConversationsPage> getConversations({
     required String accountId,
     required MailFolder folder,
     int limit = 50,
+    int offset = 0,
     bool forceRefresh = false,
   }) async {
     if (threadedConversations != null && folder.path == 'INBOX') {
       requestedFolderPaths.add(folder.path);
-      return threadedConversations!;
+      final all = threadedConversations!;
+      if (offset >= all.length) {
+        return MailConversationsPage(
+          conversations: const [],
+          hasMore: false,
+          nextOffset: offset,
+        );
+      }
+      final slice = all.skip(offset).take(limit).toList();
+      final hasMore = offset + slice.length < all.length;
+      return MailConversationsPage(
+        conversations: slice,
+        hasMore: hasMore,
+        nextOffset: offset + slice.length,
+      );
     }
     final folderMessages = await getMessages(
       accountId: accountId,
@@ -1062,7 +1081,7 @@ class _FakeMailboxRepository implements MailboxRepository {
       pageSize: limit,
       forceRefresh: forceRefresh,
     );
-    return folderMessages
+    final conversations = folderMessages
         .map(
           (message) => MailConversation(
             id: message.id,
@@ -1080,6 +1099,11 @@ class _FakeMailboxRepository implements MailboxRepository {
           ),
         )
         .toList();
+    return MailConversationsPage(
+      conversations: conversations,
+      hasMore: false,
+      nextOffset: conversations.length,
+    );
   }
 
   @override
@@ -1092,8 +1116,9 @@ class _FakeMailboxRepository implements MailboxRepository {
       accountId: accountId,
       folder: _inboxFolder,
       limit: limit,
+      offset: 0,
       forceRefresh: forceRefresh,
-    );
+    ).then((page) => page.conversations);
   }
 
   @override
@@ -1205,6 +1230,16 @@ class _FakeMailboxRepository implements MailboxRepository {
       folder: _inboxFolder,
       messageIds: [messageId],
     );
+  }
+
+  @override
+  Future<MailDeleteResult> moveMessageToFolder({
+    required String accountId,
+    required String messageId,
+    required String targetFolderPath,
+  }) async {
+    messages.removeWhere((message) => message.id == messageId);
+    return MailDeleteResult(movedMessageIds: [messageId], failed: const []);
   }
 
   @override

@@ -1,5 +1,6 @@
 import '../entities/mail_folder.dart';
 import '../entities/mail_conversation.dart';
+import '../entities/mail_conversations_page.dart';
 import '../entities/mail_delete_result.dart';
 import '../entities/mail_message_detail.dart';
 import '../entities/mail_message_attachment.dart';
@@ -12,6 +13,10 @@ import '../entities/mail_message_translation.dart';
 abstract class MailboxRepository {
   Future<List<MailFolder>> getFolders(String accountId);
 
+  /// Paths from the last successful backend `GET /api/mail/folders` response (MRU order).
+  /// Empty until [getFolders] has completed a remote fetch for this [accountId].
+  List<String> getRecentMoveDestinationPaths(String accountId);
+
   Future<List<MailMessageSummary>> getMessages({
     required String accountId,
     required MailFolder folder,
@@ -20,10 +25,11 @@ abstract class MailboxRepository {
     bool forceRefresh = false,
   });
 
-  Future<List<MailConversation>> getConversations({
+  Future<MailConversationsPage> getConversations({
     required String accountId,
     required MailFolder folder,
     int limit = 50,
+    int offset = 0,
     bool forceRefresh = false,
   });
 
@@ -79,6 +85,12 @@ abstract class MailboxRepository {
   Future<MailDeleteResult> moveMessageToTrash({
     required String accountId,
     required String messageId,
+  });
+
+  Future<MailDeleteResult> moveMessageToFolder({
+    required String accountId,
+    required String messageId,
+    required String targetFolderPath,
   });
 
   Future<MailRestoreResult> restoreMessagesToInbox({

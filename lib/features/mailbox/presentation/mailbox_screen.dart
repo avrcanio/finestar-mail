@@ -10,6 +10,7 @@ import '../../../app/providers.dart';
 import '../../../app/router/app_route.dart';
 import '../../auth/domain/entities/mail_account.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../domain/archive_folder.dart';
 import '../domain/entities/mail_conversation.dart';
 import '../domain/entities/mail_folder.dart';
 import '../domain/entities/mail_message_summary.dart';
@@ -160,6 +161,81 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
     }
   }
 
+  Future<void> _archiveSelectedMessages(MailFolder folder) async {
+    if (_selectedMessageIds.isEmpty ||
+        _isProcessingSelection ||
+        _isTrash(folder) ||
+        isArchiveLikeFolder(folder)) {
+      return;
+    }
+
+    final foldersList = ref.read(foldersProvider).asData?.value ?? const [];
+    final archivePath = selectableArchiveFolderPath(foldersList);
+    if (archivePath == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Archive folder not found for this account.'),
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() => _isProcessingSelection = true);
+    final requestedIds = _selectedMessageIds.toList();
+    try {
+      final result = await ref
+          .read(mailboxConversationsControllerProvider(folder).notifier)
+          .moveSelectedToArchive(requestedIds, archivePath);
+      if (!mounted) {
+        return;
+      }
+      final failedIds = result.failed
+          .map((failure) => failure.messageId)
+          .toSet();
+      _removeDeletedMessagesFromVisibleMailbox(
+        folder,
+        result.movedMessageIds,
+        failedIds: failedIds,
+      );
+      setState(() {
+        _selectedMessageIds
+          ..clear()
+          ..addAll(failedIds);
+      });
+      final messenger = ScaffoldMessenger.of(context);
+      if (result.movedAny && result.hasFailures) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Archived ${result.movedMessageIds.length} messages. '
+              '${result.failed.length} failed.',
+            ),
+          ),
+        );
+      } else if (result.movedAny) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              result.movedMessageIds.length == 1
+                  ? 'Archived message.'
+                  : 'Archived ${result.movedMessageIds.length} messages.',
+            ),
+          ),
+        );
+      } else if (result.hasFailures) {
+        messenger.showSnackBar(
+          SnackBar(content: Text(result.failed.first.message)),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessingSelection = false);
+      }
+    }
+  }
+
   Future<void> _restoreSelectedMessages(MailFolder folder) async {
     if (_selectedMessageIds.isEmpty ||
         _isProcessingSelection ||
@@ -222,6 +298,12 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
     final isSearching = _searchQuery.isNotEmpty;
     final folders = ref.watch(foldersProvider).asData?.value ?? const [];
     final selectedFolder = _selectedFolder(folders);
+    final archiveImapPath = selectableArchiveFolderPath(folders);
+    final showSelectionArchive =
+        selectedFolder != null &&
+        !_isTrash(selectedFolder) &&
+        !isArchiveLikeFolder(selectedFolder) &&
+        archiveImapPath != null;
 
     return Scaffold(
       key: _scaffoldKey,
@@ -289,6 +371,10 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
                       onAction: () => _isTrash(selectedFolder)
                           ? _restoreSelectedMessages(selectedFolder)
                           : _deleteSelectedMessages(selectedFolder),
+                      showArchiveButton: showSelectionArchive,
+                      onArchive: showSelectionArchive
+                          ? () => _archiveSelectedMessages(selectedFolder)
+                          : null,
                     ),
             ),
             Expanded(
@@ -306,6 +392,10 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
                             selectedFolder,
                             messageIds,
                           ),
+                      onSwipeTrashMessages: (ids) =>
+                          _handleSwipeTrash(selectedFolder, ids),
+                      onSwipeArchiveMessages: (ids) =>
+                          _handleSwipeArchive(selectedFolder, ids),
                     ),
             ),
           ],
@@ -366,22 +456,80 @@ class _MailboxScreenState extends ConsumerState<MailboxScreen> {
       _selectedMessageIds.removeAll(deletedIds);
     });
 
-    unawaited(
-      Future<void>.microtask(() {
-        if (!mounted) {
-          return;
-        }
-        ref.invalidate(mailboxConversationsControllerProvider(folder));
-        ref.invalidate(mailboxMessagesControllerProvider(folder));
-        if (_searchQuery.isNotEmpty) {
+    // Do not invalidate mailbox list providers here: that reloads only page 0
+    // and resets scroll / loadMore. State is already updated via removeMessagesFromState.
+    if (_searchQuery.isNotEmpty) {
+      unawaited(
+        Future<void>.microtask(() {
+          if (!mounted) {
+            return;
+          }
           ref.invalidate(
             mailboxSearchProvider(
               MailboxSearchRequest(folder: folder, query: _searchQuery),
             ),
           );
-        }
-      }),
+        }),
+      );
+    }
+  }
+
+  Future<void> _handleSwipeTrash(MailFolder folder, List<String> ids) async {
+    if (ids.isEmpty || _isTrash(folder)) {
+      return;
+    }
+    final result = await ref
+        .read(mailboxConversationsControllerProvider(folder).notifier)
+        .moveSelectedToTrash(ids);
+    if (!mounted) {
+      return;
+    }
+    final failedIds = result.failed.map((failure) => failure.messageId).toSet();
+    _removeDeletedMessagesFromVisibleMailbox(
+      folder,
+      result.movedMessageIds,
+      failedIds: failedIds,
     );
+    if (result.hasFailures) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.failed.first.message)),
+      );
+    }
+  }
+
+  Future<void> _handleSwipeArchive(MailFolder folder, List<String> ids) async {
+    if (ids.isEmpty || _isTrash(folder)) {
+      return;
+    }
+    final foldersList = ref.read(foldersProvider).asData?.value ?? const [];
+    final path = selectableArchiveFolderPath(foldersList);
+    if (path == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Archive folder not found for this account.'),
+          ),
+        );
+      }
+      return;
+    }
+    final result = await ref
+        .read(mailboxConversationsControllerProvider(folder).notifier)
+        .moveSelectedToArchive(ids, path);
+    if (!mounted) {
+      return;
+    }
+    final failedIds = result.failed.map((failure) => failure.messageId).toSet();
+    _removeDeletedMessagesFromVisibleMailbox(
+      folder,
+      result.movedMessageIds,
+      failedIds: failedIds,
+    );
+    if (result.hasFailures) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.failed.first.message)),
+      );
+    }
   }
 }
 
@@ -394,6 +542,8 @@ class _SelectionActionBar extends StatelessWidget {
     required this.mode,
     required this.onClose,
     required this.onAction,
+    this.showArchiveButton = false,
+    this.onArchive,
   });
 
   final int count;
@@ -401,6 +551,8 @@ class _SelectionActionBar extends StatelessWidget {
   final _SelectionActionMode mode;
   final VoidCallback onClose;
   final VoidCallback onAction;
+  final bool showArchiveButton;
+  final VoidCallback? onArchive;
 
   @override
   Widget build(BuildContext context) {
@@ -437,7 +589,15 @@ class _SelectionActionBar extends StatelessWidget {
                   child: CircularProgressIndicator(strokeWidth: 2.5),
                 ),
               )
-            else
+            else ...[
+              if (mode == _SelectionActionMode.delete &&
+                  showArchiveButton &&
+                  onArchive != null)
+                IconButton(
+                  tooltip: 'Archive selected',
+                  onPressed: onArchive,
+                  icon: const Icon(Icons.archive_outlined),
+                ),
               IconButton(
                 tooltip: mode == _SelectionActionMode.restore
                     ? 'Restore selected to INBOX'
@@ -449,6 +609,7 @@ class _SelectionActionBar extends StatelessWidget {
                       : Icons.delete_outline,
                 ),
               ),
+            ],
             const SizedBox(width: 8),
           ],
         ),
@@ -900,6 +1061,8 @@ class _MailboxContent extends ConsumerStatefulWidget {
     required this.locallyRemovedMessageIds,
     required this.onToggleSelected,
     required this.onDeletedMessages,
+    required this.onSwipeTrashMessages,
+    required this.onSwipeArchiveMessages,
   });
 
   final MailFolder folder;
@@ -909,6 +1072,8 @@ class _MailboxContent extends ConsumerStatefulWidget {
   final Set<String> locallyRemovedMessageIds;
   final ValueChanged<String> onToggleSelected;
   final ValueChanged<Set<String>> onDeletedMessages;
+  final Future<void> Function(List<String> ids) onSwipeTrashMessages;
+  final Future<void> Function(List<String> ids) onSwipeArchiveMessages;
 
   @override
   ConsumerState<_MailboxContent> createState() => _MailboxContentState();
@@ -938,7 +1103,26 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
   }
 
   void _maybeLoadMore() {
-    return;
+    if (!widget.scrollController.hasClients || widget.searchQuery.isNotEmpty) {
+      return;
+    }
+    final position = widget.scrollController.position;
+    if (position.maxScrollExtent <= 0) {
+      return;
+    }
+    if (position.pixels < position.maxScrollExtent - 400) {
+      return;
+    }
+    final async = ref.read(mailboxConversationsControllerProvider(widget.folder));
+    final data = async.asData?.value;
+    if (data == null || data.isLoadingMore || !data.hasMore) {
+      return;
+    }
+    unawaited(
+      ref
+          .read(mailboxConversationsControllerProvider(widget.folder).notifier)
+          .loadMore(),
+    );
   }
 
   bool _isConversationCollapsed(MailConversation conversation) {
@@ -959,6 +1143,13 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
     final folder = widget.folder;
     final searchQuery = widget.searchQuery;
     final isSearching = searchQuery.isNotEmpty;
+    final foldersList = ref.watch(foldersProvider).asData?.value ?? const [];
+    final archiveImapPath = selectableArchiveFolderPath(foldersList);
+    final listSwipeEnabled = !_isTrash(folder);
+    final listSwipeArchiveEnabled =
+        listSwipeEnabled &&
+        !isArchiveLikeFolder(folder) &&
+        archiveImapPath != null;
     final searchRequest = MailboxSearchRequest(
       folder: folder,
       query: searchQuery,
@@ -1009,6 +1200,10 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
                   selectionEnabled: false,
                   onToggleSelected: widget.onToggleSelected,
                   onDeletedMessages: widget.onDeletedMessages,
+                  listSwipeEnabled: listSwipeEnabled,
+                  listSwipeArchiveEnabled: listSwipeArchiveEnabled,
+                  onSwipeTrashMessages: widget.onSwipeTrashMessages,
+                  onSwipeArchiveMessages: widget.onSwipeArchiveMessages,
                 );
               }
 
@@ -1033,6 +1228,10 @@ class _MailboxContentState extends ConsumerState<_MailboxContent> {
                 onDeletedMessages: widget.onDeletedMessages,
                 isConversationCollapsed: _isConversationCollapsed,
                 onToggleConversationExpanded: _toggleConversationExpanded,
+                listSwipeEnabled: listSwipeEnabled,
+                listSwipeArchiveEnabled: listSwipeArchiveEnabled,
+                onSwipeTrashMessages: widget.onSwipeTrashMessages,
+                onSwipeArchiveMessages: widget.onSwipeArchiveMessages,
               );
             },
             error: (error, stackTrace) => ErrorStateView(
@@ -1060,6 +1259,10 @@ class _ConversationList extends ConsumerWidget {
     required this.onDeletedMessages,
     required this.isConversationCollapsed,
     required this.onToggleConversationExpanded,
+    required this.listSwipeEnabled,
+    required this.listSwipeArchiveEnabled,
+    required this.onSwipeTrashMessages,
+    required this.onSwipeArchiveMessages,
   });
 
   final List<MailConversation> conversations;
@@ -1069,6 +1272,10 @@ class _ConversationList extends ConsumerWidget {
   final ValueChanged<Set<String>> onDeletedMessages;
   final bool Function(MailConversation conversation) isConversationCollapsed;
   final ValueChanged<String> onToggleConversationExpanded;
+  final bool listSwipeEnabled;
+  final bool listSwipeArchiveEnabled;
+  final Future<void> Function(List<String> ids) onSwipeTrashMessages;
+  final Future<void> Function(List<String> ids) onSwipeArchiveMessages;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1088,6 +1295,10 @@ class _ConversationList extends ConsumerWidget {
               onToggleSelected: onToggleSelected,
               onDeletedMessages: onDeletedMessages,
               onShowActions: _showMessageActions,
+              listSwipeEnabled: listSwipeEnabled,
+              listSwipeArchiveEnabled: listSwipeArchiveEnabled,
+              onSwipeTrashMessages: onSwipeTrashMessages,
+              onSwipeArchiveMessages: onSwipeArchiveMessages,
             ),
           ),
       ],
@@ -1117,6 +1328,10 @@ class _MessageList extends ConsumerWidget {
     required this.selectionEnabled,
     required this.onToggleSelected,
     required this.onDeletedMessages,
+    required this.listSwipeEnabled,
+    required this.listSwipeArchiveEnabled,
+    required this.onSwipeTrashMessages,
+    required this.onSwipeArchiveMessages,
   });
 
   final List<MailMessageSummary> messages;
@@ -1125,6 +1340,10 @@ class _MessageList extends ConsumerWidget {
   final bool selectionEnabled;
   final ValueChanged<String> onToggleSelected;
   final ValueChanged<Set<String>> onDeletedMessages;
+  final bool listSwipeEnabled;
+  final bool listSwipeArchiveEnabled;
+  final Future<void> Function(List<String> ids) onSwipeTrashMessages;
+  final Future<void> Function(List<String> ids) onSwipeArchiveMessages;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1150,6 +1369,14 @@ class _MessageList extends ConsumerWidget {
               onToggleSelected: onToggleSelected,
               onDeletedMessages: onDeletedMessages,
               onShowActions: _showMessageActions,
+              slideActionsEnabled: listSwipeEnabled,
+              showArchiveSwipe: listSwipeArchiveEnabled,
+              onSwipeDelete: listSwipeEnabled
+                  ? () => onSwipeTrashMessages([message.id])
+                  : null,
+              onSwipeArchive: listSwipeArchiveEnabled
+                  ? () => onSwipeArchiveMessages([message.id])
+                  : null,
             ),
           ),
         );
@@ -1186,8 +1413,7 @@ Future<void> showMessageActions({
   Future<void> apply(Future<void> Function() action) async {
     Navigator.of(context).pop();
     await action();
-    ref.invalidate(mailboxConversationsControllerProvider(folder));
-    ref.invalidate(mailboxMessagesControllerProvider(folder));
+    // Avoid full list reload (loses scroll / paged conversations); flags sync on next refresh.
   }
 
   await showModalBottomSheet<void>(

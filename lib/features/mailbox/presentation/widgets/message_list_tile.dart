@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
@@ -38,6 +39,10 @@ class MailMessageListTile extends StatelessWidget {
     this.showOutboundBadge = false,
     this.isLatestInConversation = false,
     this.onDeletedMessages,
+    this.slideActionsEnabled = false,
+    this.showArchiveSwipe = false,
+    this.onSwipeDelete,
+    this.onSwipeArchive,
   });
 
   final MailMessageSummary message;
@@ -58,10 +63,17 @@ class MailMessageListTile extends StatelessWidget {
   final bool showOutboundBadge;
   final bool isLatestInConversation;
   final ValueChanged<Set<String>>? onDeletedMessages;
+  final bool slideActionsEnabled;
+  final bool showArchiveSwipe;
+  final Future<void> Function()? onSwipeDelete;
+  final Future<void> Function()? onSwipeArchive;
 
   @override
   Widget build(BuildContext context) {
     final formatter = DateFormat('MMM d');
+    final received = message.receivedAt;
+    final showYearBelowDate =
+        received.year != DateTime.now().year;
     final effectiveUnread = isUnread ?? !message.isRead;
     final effectiveImportant = isImportant ?? message.isImportant;
     final effectivePinned = isPinned ?? message.isPinned;
@@ -69,7 +81,7 @@ class MailMessageListTile extends StatelessWidget {
 
     return Consumer(
       builder: (context, ref, child) {
-        return ListTile(
+        final listTile = ListTile(
           key: isLatestInConversation
               ? ValueKey('latest-conversation-message-${message.id}')
               : null,
@@ -137,7 +149,17 @@ class MailMessageListTile extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(formatter.format(message.receivedAt)),
+              Text(formatter.format(received)),
+              if (showYearBelowDate) ...[
+                const SizedBox(height: 2),
+                Text(
+                  '${received.year}',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: const Color(0xFF5F6368),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
               const SizedBox(height: 6),
               Row(
                 mainAxisSize: MainAxisSize.min,
@@ -163,6 +185,58 @@ class MailMessageListTile extends StatelessWidget {
             ],
           ),
           isThreeLine: true,
+        );
+
+        final hasDelete = slideActionsEnabled && onSwipeDelete != null;
+        final hasArchive =
+            slideActionsEnabled && showArchiveSwipe && onSwipeArchive != null;
+        if (!hasDelete && !hasArchive) {
+          return listTile;
+        }
+
+        return Slidable(
+          key: ValueKey('mail-slidable-${message.id}'),
+          startActionPane: hasDelete
+              ? ActionPane(
+                  motion: const DrawerMotion(),
+                  extentRatio: 0.28,
+                  children: [
+                    SlidableAction(
+                      onPressed: (actionContext) async {
+                        await onSwipeDelete!();
+                        if (actionContext.mounted) {
+                          Slidable.of(actionContext)?.close();
+                        }
+                      },
+                      backgroundColor: const Color(0xFFD93025),
+                      foregroundColor: Colors.white,
+                      icon: Icons.delete_outline,
+                      label: 'Delete',
+                    ),
+                  ],
+                )
+              : null,
+          endActionPane: hasArchive
+              ? ActionPane(
+                  motion: const DrawerMotion(),
+                  extentRatio: 0.28,
+                  children: [
+                    SlidableAction(
+                      onPressed: (actionContext) async {
+                        await onSwipeArchive!();
+                        if (actionContext.mounted) {
+                          Slidable.of(actionContext)?.close();
+                        }
+                      },
+                      backgroundColor: const Color(0xFF5F6368),
+                      foregroundColor: Colors.white,
+                      icon: Icons.archive_outlined,
+                      label: 'Archive',
+                    ),
+                  ],
+                )
+              : null,
+          child: listTile,
         );
       },
     );

@@ -8,6 +8,7 @@ import '../../../data/secure/secure_storage_service.dart';
 import '../domain/entities/mail_delete_result.dart';
 import '../domain/entities/mail_folder.dart' as domain;
 import '../domain/entities/mail_conversation.dart';
+import '../domain/entities/mail_conversations_page.dart';
 import '../domain/entities/mail_message_attachment.dart';
 import '../domain/entities/mail_message_detail.dart';
 import '../domain/entities/mail_message_page.dart';
@@ -16,6 +17,7 @@ import '../domain/entities/mail_message_translation.dart';
 import '../domain/entities/mail_restore_result.dart';
 import '../domain/entities/mail_thread.dart';
 import '../domain/repositories/mailbox_repository.dart';
+import '../domain/stale_mailbox_message_exception.dart';
 
 class MailboxRepositoryImpl implements MailboxRepository {
   MailboxRepositoryImpl({
@@ -29,6 +31,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
   final db.AppDatabase _appDatabase;
   final SecureStorageService? _secureStorageService;
   final BackendMailApiClient? _backendMailApiClient;
+
+  final Map<String, List<String>> _recentMoveDestinationPathsByAccountId = {};
 
   static const _restoreTargetFolder = 'INBOX';
 
@@ -99,6 +103,15 @@ class MailboxRepositoryImpl implements MailboxRepository {
     return fallbackFolders;
   }
 
+  @override
+  List<String> getRecentMoveDestinationPaths(String accountId) {
+    final cached = _recentMoveDestinationPathsByAccountId[accountId];
+    if (cached == null) {
+      return const [];
+    }
+    return List<String>.unmodifiable(cached);
+  }
+
   Future<List<domain.MailFolder>?> _fetchBackendFolders(
     String accountId,
   ) async {
@@ -108,6 +121,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
     }
 
     final response = await _backendMailApiClient!.folders(token: token);
+    _recentMoveDestinationPathsByAccountId[accountId] = List<String>.from(
+      response.recentMoveDestinations,
+    );
     return response.folders
         .where((folder) => _backendFolderPath(folder).isNotEmpty)
         .map((folder) => _mailFolderFromBackend(accountId, folder))
@@ -304,21 +320,29 @@ class MailboxRepositoryImpl implements MailboxRepository {
   }
 
   @override
-  Future<List<MailConversation>> getConversations({
+  Future<MailConversationsPage> getConversations({
     required String accountId,
     required domain.MailFolder folder,
     int limit = 50,
+    int offset = 0,
     bool forceRefresh = false,
   }) async {
     if (folder.isInbox) {
-      final unifiedConversations = await _fetchBackendUnifiedConversations(
+      final unifiedPage = await _fetchBackendUnifiedConversations(
         accountId: accountId,
         fallbackFolder: folder,
         limit: limit,
+        offset: offset,
       );
-      if (unifiedConversations != null) {
-        return unifiedConversations;
+      if (unifiedPage != null) {
+        return unifiedPage;
       }
+    } else if (offset > 0) {
+      return MailConversationsPage(
+        conversations: const [],
+        hasMore: false,
+        nextOffset: offset,
+      );
     }
 
     final remoteConversations = await _fetchBackendConversations(
@@ -327,7 +351,19 @@ class MailboxRepositoryImpl implements MailboxRepository {
       limit: limit,
     );
     if (remoteConversations != null) {
-      return remoteConversations;
+      return MailConversationsPage(
+        conversations: remoteConversations,
+        hasMore: false,
+        nextOffset: remoteConversations.length,
+      );
+    }
+
+    if (offset > 0) {
+      return MailConversationsPage(
+        conversations: const [],
+        hasMore: false,
+        nextOffset: offset,
+      );
     }
 
     final page = await getMessagePage(
@@ -336,7 +372,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       pageSize: limit,
       forceRefresh: forceRefresh,
     );
-    return page.messages
+    final conversations = page.messages
         .map(
           (message) => MailConversation(
             id: message.id,
@@ -360,6 +396,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
           ),
         )
         .toList();
+    return MailConversationsPage(
+      conversations: conversations,
+      hasMore: false,
+      nextOffset: conversations.length,
+    );
   }
 
   @override
@@ -374,12 +415,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
       path: 'INBOX',
       isInbox: true,
     );
-    return getConversations(
+    return (await getConversations(
       accountId: accountId,
       folder: inbox,
       limit: limit,
+      offset: 0,
       forceRefresh: forceRefresh,
-    );
+    )).conversations;
   }
 
   @override
@@ -527,10 +569,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
     }).toList();
   }
 
-  Future<List<MailConversation>?> _fetchBackendUnifiedConversations({
+  Future<MailConversationsPage?> _fetchBackendUnifiedConversations({
     required String accountId,
     required domain.MailFolder fallbackFolder,
     required int limit,
+    int offset = 0,
   }) async {
     final token = await _authToken(accountId);
     if (token == null) {
@@ -542,6 +585,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       response = await _backendMailApiClient!.unifiedConversations(
         token: token,
         limit: limit,
+        offset: offset,
       );
     } on BackendMailApiException catch (error) {
       if (error.statusCode == 404) {
@@ -573,65 +617,70 @@ class MailboxRepositoryImpl implements MailboxRepository {
       for (final summary in cachedSummaries) summary.id: summary,
     };
 
-    return response.conversations.map((conversation) {
-      final timelineMessages = conversation.messages.map((message) {
-        final summary = message.summary;
-        final id = _messageId(
-          accountId,
-          summary.folder.isEmpty ? fallbackFolder.path : summary.folder,
-          summary.uid,
+    return MailConversationsPage(
+      conversations: response.conversations.map((conversation) {
+        final timelineMessages = conversation.messages.map((message) {
+          final summary = message.summary;
+          final id = _messageId(
+            accountId,
+            summary.folder.isEmpty ? fallbackFolder.path : summary.folder,
+            summary.uid,
+          );
+          return MailConversationMessage(
+            message:
+                summariesById[id] ??
+                _summaryFromBackendMessage(accountId, fallbackFolder, summary),
+            direction: _conversationDirection(message.direction),
+          );
+        }).toList();
+        final root = timelineMessages.isEmpty
+            ? MailMessageSummary(
+                id: conversation.conversationId,
+                folderId: fallbackFolder.id,
+                subject: '',
+                sender: '',
+                preview: '',
+                receivedAt: conversation.latestDate ?? DateTime.now(),
+                isRead: !conversation.hasUnread,
+                hasAttachments: conversation.hasVisibleAttachments,
+                sequence: 0,
+              )
+            : timelineMessages.first.message;
+        final replies = timelineMessages
+            .skip(1)
+            .map((message) => message.message)
+            .toList();
+        return MailConversation(
+          id: conversation.conversationId.isEmpty
+              ? root.id
+              : conversation.conversationId,
+          messageCount: conversation.messageCount == 0
+              ? timelineMessages.length
+              : conversation.messageCount,
+          replyCount:
+              conversation.replyCount == 0 && timelineMessages.isNotEmpty
+              ? timelineMessages.length - 1
+              : conversation.replyCount,
+          hasUnread: conversation.hasUnread,
+          hasAttachments: conversation.hasAttachments,
+          hasVisibleAttachments: conversation.hasVisibleAttachments,
+          participants: conversation.participants
+              .map(
+                (participant) => MailConversationParticipant(
+                  name: participant.name,
+                  email: participant.email,
+                ),
+              )
+              .toList(),
+          rootMessage: root,
+          replies: replies,
+          latestDate: conversation.latestDate ?? root.receivedAt,
+          timelineMessages: timelineMessages,
         );
-        return MailConversationMessage(
-          message:
-              summariesById[id] ??
-              _summaryFromBackendMessage(accountId, fallbackFolder, summary),
-          direction: _conversationDirection(message.direction),
-        );
-      }).toList();
-      final root = timelineMessages.isEmpty
-          ? MailMessageSummary(
-              id: conversation.conversationId,
-              folderId: fallbackFolder.id,
-              subject: '',
-              sender: '',
-              preview: '',
-              receivedAt: conversation.latestDate ?? DateTime.now(),
-              isRead: !conversation.hasUnread,
-              hasAttachments: conversation.hasVisibleAttachments,
-              sequence: 0,
-            )
-          : timelineMessages.first.message;
-      final replies = timelineMessages
-          .skip(1)
-          .map((message) => message.message)
-          .toList();
-      return MailConversation(
-        id: conversation.conversationId.isEmpty
-            ? root.id
-            : conversation.conversationId,
-        messageCount: conversation.messageCount == 0
-            ? timelineMessages.length
-            : conversation.messageCount,
-        replyCount: conversation.replyCount == 0 && timelineMessages.isNotEmpty
-            ? timelineMessages.length - 1
-            : conversation.replyCount,
-        hasUnread: conversation.hasUnread,
-        hasAttachments: conversation.hasAttachments,
-        hasVisibleAttachments: conversation.hasVisibleAttachments,
-        participants: conversation.participants
-            .map(
-              (participant) => MailConversationParticipant(
-                name: participant.name,
-                email: participant.email,
-              ),
-            )
-            .toList(),
-        rootMessage: root,
-        replies: replies,
-        latestDate: conversation.latestDate ?? root.receivedAt,
-        timelineMessages: timelineMessages,
-      );
-    }).toList();
+      }).toList(),
+      hasMore: response.hasMore,
+      nextOffset: response.nextOffset,
+    );
   }
 
   Future<MailMessagePage> _cachedMessagePage({
@@ -807,91 +856,99 @@ class MailboxRepositoryImpl implements MailboxRepository {
     }
 
     final folderPath = await _folderPathForMessage(accountId, id);
-    final response = await _backendMailApiClient!.messageDetail(
-      token: token,
-      folder: folderPath,
-      uid: uid,
-    );
-    final message = response.message;
-    final folder = message.folder.isEmpty ? folderPath : message.folder;
-    final folderId = _folderId(accountId, folder);
-    final messageId = _messageId(accountId, folder, message.uid);
-    final receivedAt = message.date ?? DateTime.now();
-    final allAttachments = _attachmentsFromBackend(message.attachments);
-    final rawBodyHtml = message.htmlBody.isEmpty ? null : message.htmlBody;
-    final bodyHtml = rawBodyHtml == null
-        ? null
-        : await _resolveInlineCidImages(
-            token: token,
-            folder: folder,
-            uid: message.uid,
-            bodyHtml: rawBodyHtml,
-            attachments: allAttachments,
-          );
-    final visibleAttachments = _visibleAttachmentsForHtml(
-      rawBodyHtml,
-      allAttachments,
-    );
-    final detail = MailMessageDetail(
-      id: messageId,
-      subject: _subject(message.subject),
-      sender: _sender(message.sender),
-      recipients: [...message.to, ...message.cc],
-      bodyPlain: message.textBody,
-      bodyHtml: bodyHtml,
-      receivedAt: receivedAt,
-      attachments: visibleAttachments,
-    );
+    try {
+      final response = await _backendMailApiClient!.messageDetail(
+        token: token,
+        folder: folderPath,
+        uid: uid,
+      );
+      final message = response.message;
+      final folder = message.folder.isEmpty ? folderPath : message.folder;
+      final folderId = _folderId(accountId, folder);
+      final messageId = _messageId(accountId, folder, message.uid);
+      final receivedAt = message.date ?? DateTime.now();
+      final allAttachments = _attachmentsFromBackend(message.attachments);
+      final rawBodyHtml = message.htmlBody.isEmpty ? null : message.htmlBody;
+      final bodyHtml = rawBodyHtml == null
+          ? null
+          : await _resolveInlineCidImages(
+              token: token,
+              folder: folder,
+              uid: message.uid,
+              bodyHtml: rawBodyHtml,
+              attachments: allAttachments,
+            );
+      final visibleAttachments = _visibleAttachmentsForHtml(
+        rawBodyHtml,
+        allAttachments,
+      );
+      final detail = MailMessageDetail(
+        id: messageId,
+        subject: _subject(message.subject),
+        sender: _sender(message.sender),
+        recipients: [...message.to, ...message.cc],
+        bodyPlain: message.textBody,
+        bodyHtml: bodyHtml,
+        receivedAt: receivedAt,
+        attachments: visibleAttachments,
+      );
 
-    await _appDatabase.batch((batch) {
-      batch.insert(
-        _appDatabase.mailFolders,
-        db.MailFoldersCompanion.insert(
-          id: folderId,
-          accountId: accountId,
-          name: folder,
-          path: folder,
-          isInbox: _isInboxPath(folder),
-        ),
-        mode: InsertMode.insertOrIgnore,
-      );
-      batch.insert(
-        _appDatabase.messageDetails,
-        db.MessageDetailsCompanion.insert(
-          id: messageId,
-          accountId: Value(accountId),
-          folderId: Value(folderId),
-          subject: detail.subject,
-          sender: detail.sender,
-          recipients: detail.recipients.join(','),
-          bodyPlain: detail.bodyPlain,
-          bodyHtml: Value(detail.bodyHtml),
-          receivedAt: detail.receivedAt,
-          messageIdHeader: Value(message.messageId),
-        ),
-        mode: InsertMode.insertOrReplace,
-      );
-      batch.insert(
-        _appDatabase.messageSummaries,
-        db.MessageSummariesCompanion.insert(
-          id: messageId,
-          accountId: Value(accountId),
-          folderId: folderId,
-          subject: detail.subject,
-          sender: detail.sender,
-          preview: _preview(detail.bodyPlain),
-          receivedAt: receivedAt,
-          isRead: _hasFlag(message.flags, 'seen'),
-          hasAttachments:
-              message.hasVisibleAttachments ?? visibleAttachments.isNotEmpty,
-          sequence: int.tryParse(message.uid) ?? 0,
-          isImportant: Value(_hasFlag(message.flags, 'flagged')),
-        ),
-        mode: InsertMode.insertOrReplace,
-      );
-    });
+      await _appDatabase.batch((batch) {
+        batch.insert(
+          _appDatabase.mailFolders,
+          db.MailFoldersCompanion.insert(
+            id: folderId,
+            accountId: accountId,
+            name: folder,
+            path: folder,
+            isInbox: _isInboxPath(folder),
+          ),
+          mode: InsertMode.insertOrIgnore,
+        );
+        batch.insert(
+          _appDatabase.messageDetails,
+          db.MessageDetailsCompanion.insert(
+            id: messageId,
+            accountId: Value(accountId),
+            folderId: Value(folderId),
+            subject: detail.subject,
+            sender: detail.sender,
+            recipients: detail.recipients.join(','),
+            bodyPlain: detail.bodyPlain,
+            bodyHtml: Value(detail.bodyHtml),
+            receivedAt: detail.receivedAt,
+            messageIdHeader: Value(message.messageId),
+          ),
+          mode: InsertMode.insertOrReplace,
+        );
+        batch.insert(
+          _appDatabase.messageSummaries,
+          db.MessageSummariesCompanion.insert(
+            id: messageId,
+            accountId: Value(accountId),
+            folderId: folderId,
+            subject: detail.subject,
+            sender: detail.sender,
+            preview: _preview(detail.bodyPlain),
+            receivedAt: receivedAt,
+            isRead: _hasFlag(message.flags, 'seen'),
+            hasAttachments:
+                message.hasVisibleAttachments ?? visibleAttachments.isNotEmpty,
+            sequence: int.tryParse(message.uid) ?? 0,
+            isImportant: Value(_hasFlag(message.flags, 'flagged')),
+          ),
+          mode: InsertMode.insertOrReplace,
+        );
+      });
 
-    return detail;
+      return detail;
+    } on BackendMailApiException catch (error) {
+      if (error.statusCode == 404 && error.code == 'message_not_found') {
+        await _removeCachedMessages(accountId: accountId, messageIds: [id]);
+        throw const StaleMailboxMessageException();
+      }
+      rethrow;
+    }
   }
 
   @override
@@ -1326,6 +1383,96 @@ class MailboxRepositoryImpl implements MailboxRepository {
   }
 
   @override
+  Future<MailDeleteResult> moveMessageToFolder({
+    required String accountId,
+    required String messageId,
+    required String targetFolderPath,
+  }) async {
+    final uid = _uidFromMessageId(messageId);
+    if (uid == null) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: [
+          MailDeleteFailure(
+            messageId: messageId,
+            message: 'Only synced backend messages can be moved.',
+          ),
+        ],
+      );
+    }
+
+    final folderPath = await _folderPathForMessage(accountId, messageId);
+    if (folderPath.trim().toLowerCase() ==
+        targetFolderPath.trim().toLowerCase()) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: [
+          MailDeleteFailure(
+            messageId: messageId,
+            message: 'Message is already in that folder.',
+          ),
+        ],
+      );
+    }
+
+    final token = await _authToken(accountId);
+    if (token == null) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: [
+          MailDeleteFailure(
+            messageId: messageId,
+            message: 'Active account session is missing.',
+          ),
+        ],
+      );
+    }
+
+    try {
+      final response = await _backendMailApiClient!.moveMessage(
+        token: token,
+        folder: folderPath,
+        uid: uid,
+        targetFolder: targetFolderPath,
+      );
+      final movedIds = response.moved
+          .map((movedUid) => _messageId(accountId, folderPath, movedUid))
+          .where((id) => id == messageId)
+          .toList();
+      await _removeCachedMessages(accountId: accountId, messageIds: movedIds);
+      return MailDeleteResult(
+        movedMessageIds: movedIds,
+        failed: response.failed
+            .map(
+              (failure) => MailDeleteFailure(
+                messageId: _messageId(accountId, folderPath, failure.uid),
+                message: failure.detail.trim().isEmpty
+                    ? (failure.error.trim().isEmpty
+                          ? 'Move failed.'
+                          : failure.error)
+                    : failure.detail,
+              ),
+            )
+            .toList(),
+      );
+    } on BackendMailApiException catch (error) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: [
+          MailDeleteFailure(messageId: messageId, message: error.userMessage),
+        ],
+      );
+    } catch (_) {
+      return MailDeleteResult(
+        movedMessageIds: const [],
+        failed: [
+          MailDeleteFailure(messageId: messageId, message: 'Move failed.'),
+        ],
+      );
+    }
+  }
+
+  @override
   Future<MailRestoreResult> restoreMessagesToInbox({
     required String accountId,
     required domain.MailFolder folder,
@@ -1641,6 +1788,18 @@ class MailboxRepositoryImpl implements MailboxRepository {
     required String messageId,
     required bool isRead,
   }) async {
+    final client = _backendMailApiClient;
+    final token = await _authToken(accountId);
+    final uid = _uidFromMessageId(messageId);
+    if (client != null && token != null && uid != null && uid.isNotEmpty) {
+      final folder = await _folderPathForMessage(accountId, messageId);
+      await client.setMessageReadState(
+        token: token,
+        folder: folder,
+        uid: uid,
+        read: isRead,
+      );
+    }
     await _updateCachedSummary(
       accountId: accountId,
       messageId: messageId,
